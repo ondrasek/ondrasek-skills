@@ -227,7 +227,7 @@ class RunChecksTests(unittest.TestCase):
         self.assertEqual(set(checks.GROUPS.values()), {"outcome", "process", "style", "efficiency"})
 
     def test_the_bounds_are_the_stated_ones(self):
-        self.assertEqual((checks.MAX_REPLY_LINES, checks.MAX_REPLY_WORDS, checks.MAX_OPTIONS), (12, 150, 3))
+        self.assertEqual((checks.MAX_REPLY_LINES, checks.MAX_REPLY_WORDS, checks.MAX_OPTIONS), (12, 180, 3))
 
 
 if __name__ == "__main__":

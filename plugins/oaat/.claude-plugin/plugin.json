@@ -1,7 +1,7 @@
 {
   "name": "oaat",
   "description": "Walk through pending decisions, questions, concerns and risks strictly one at a time, without overwhelming the user.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "author": {
     "name": "Ondrej Krajicek",
     "url": "https://github.com/ondrasek"

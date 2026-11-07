@@ -71,7 +71,7 @@ class RealTraceTests(unittest.TestCase):
 
     def test_the_real_reply_fails_exactly_the_checks_that_name_its_two_causes(self):
         failed = {cid for cid, ok, _ in checks.run_checks(self.case) if not ok}
-        self.assertEqual(failed, {"sections", "length-bound", "recommended-marked"})   # 'Question:' for 'One question:'; 168 words with the user's TLDR block; the recommendation is inside option 1
+        self.assertEqual(failed, {"sections", "recommended-marked"})   # 'Question:' for 'One question:'; the recommendation is inside option 1 (its 168 words pass the bound of 180 since 2026-11-07)
 
     def test_the_options_list_ends_where_the_options_end(self):
         self.assertEqual(len(checks.option_lines(self.case.reply)), 3)

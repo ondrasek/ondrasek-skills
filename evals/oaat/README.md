@@ -162,7 +162,7 @@ The `Question:` label failed on the same rows in every earlier run, so a skill e
 
 ## The reply template (applied 2026-11-07)
 
-The original skill described the reply as a list of five parts, and real replies then differed from run to run: lettered or numbered options, the recommendation inside an option or in a bullet after the list, `Question:` for `One question:`. On 2026-11-05 the author set one structure: options always numbered, the recommendation on a line of its own after the options, never a bullet. The checks `options-numbered` and `recommended-marked` test it, and `plugins/oaat` (version 0.2.0) now carries the template in section 3 and the wrap-up. **No real run has graded the template yet.** Run `make eval ARGS="--trials 3 --label template"` (about 33 model calls, see the cost table) and compare it with a run of the previous text from git history (`git show <commit>:plugins/oaat/skills/oaat/SKILL.md`, then `--skill-path` to a copy of the plugin).
+The original skill described the reply as a list of five parts, and real replies then differed from run to run: lettered or numbered options, the recommendation inside an option or in a bullet after the list, `Question:` for `One question:`. On 2026-11-05 the author set one structure: options always numbered, the recommendation on a line of its own after the options, never a bullet. The checks `options-numbered` and `recommended-marked` test it, and `plugins/oaat` (version 0.2.0) now carries the template in section 3 and the wrap-up. **First real run of the template (2026-11-07, all 11 prompts, 3 trials, no judge, $0.76):** 8 of 11 prompts passed every trial, 28 of 33 trials. `process` 66/66 and `style` 111/111: the template removed the `sections`, `options-numbered` and `recommended-marked` failures of the original. Failures: `followup-tangent` 0/3 (the replies paraphrased the flag as "This looks like a tangent…" and showed the item header again: the tangent bullet was still loose prose), and `length-bound` on two replies of 154 and 170 words (the bound was raised from 150 to 180 words). **The fix:** the tangent rule became a template (oaat 0.2.1: the exact flag sentence, nothing else). `followup-tangent` re-run, 3 trials ($0.20): 3/3 pass. The full set was not re-run after the fix, so treat the other ten rows as graded on 0.2.0.
 
 ## The prompt table (`evals/prompts.csv`)
 
@@ -215,7 +215,7 @@ Each check is a pure function of a `Case` (the prompt row, the events of the tra
 | `one-question` | style | item, skip, tangent | exactly one `?` in the reply, and (item, skip) it sits in the One question section |
 | `no-other-items` | outcome | item, skip | at most one pending title appears in the reply (on a skip, the title just parked does not count) |
 | `no-preview` | outcome | item, skip | no `item N` besides the header (on a skip, the parked item's number does not count), no phrase such as "next up" or "coming up" |
-| `length-bound` | efficiency | item, skip, stop, tangent | at most 12 non-empty lines and 150 words |
+| `length-bound` | efficiency | item, skip, stop, tangent | at most 12 non-empty lines and 180 words |
 | `wrapup-headings` | outcome | stop | Decided, Parked, Next action, in that order |
 | `tangent-flag` | outcome | tangent | "This may be a tangent from X. Continue or refocus?" |
 | `all-items-listed` | outcome | list | every pending title appears in the reply |
@@ -274,7 +274,7 @@ Two flags of the default agent command come from the same documentation:
 - **A check of verbatim text misses a paraphrase.** See "What the deterministic checks can see".
 - **`header-total` assumes M is the number of pending items.** A skill version that counts only open items would fail this check on a follow-up; adjust the check to the skill's rule.
 - **The `input.skill` field is verified once**, on one version (see the table above). The documentation does not list it.
-- **The bounds are guesses from one real reply.** `MAX_REPLY_WORDS` (150) and `MAX_REPLY_LINES` (12) came from the skill's "about 8 lines" and from that reply (143 words and 9 lines without the closing block). Run 3 to 5 trials of every prompt, then set the bounds from the replies that you accept.
+- **The bounds are guesses.** `MAX_REPLY_WORDS` started at 150 and was raised to 180 on 2026-11-07, after a 33-run template run put two correct replies at 154 and 170 words. `MAX_REPLY_WORDS` (first value 150) and `MAX_REPLY_LINES` (12) came from the skill's "about 8 lines" and from that reply (143 words and 9 lines without the closing block). Run 3 to 5 trials of every prompt, then set the bounds from the replies that you accept.
 - **The judge is a model.** Its verdict can differ between runs.
 - **A two-turn row depends on `--resume`.** One real run (2026-11-04) resumed the session and the skill text stayed in context. The runner needs the session id from turn 1; without it the row fails with a note.
 

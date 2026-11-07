@@ -1,13 +1,12 @@
 $ python3 python/run_evals.py --fixtures tests/fixtures/traces/real --only explicit-name --label real
 id             kind        expect   trigger  trials  result  failed checks
-explicit-name  explicit    item     yes      0/1     FAIL    sections, recommended-marked, length-bound
+explicit-name  explicit    item     yes      0/1     FAIL    sections, recommended-marked
 
 failures:
   explicit-name trial 1: sections: missing: one question; in order: True
   explicit-name trial 1: recommended-marked: the recommendation is a list item; it must be a line of its own after the options
-  explicit-name trial 1: length-bound: 12 non-empty lines (max 12), 168 words (max 150)
 
-checks passed by group: outcome 5/5, process 2/2, style 4/6, efficiency 2/3
+checks passed by group: outcome 5/5, process 2/2, style 4/6, efficiency 3/3
 cost reported by the result events: $0.0870 over 1 runs
 summary: prompts passed 0/1 (every trial), trials passed 0/1, pass rate 0%
 (exit code 1)

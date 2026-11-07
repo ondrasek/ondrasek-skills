@@ -17,7 +17,7 @@ import agent_trace as trace
 from cases import HEADER_RE, Row, pending_titles, previous_header_number, previous_header_title
 
 MAX_REPLY_LINES = 12     # non-empty lines; the skill asks for about 8 lines for one item
-MAX_REPLY_WORDS = 150
+MAX_REPLY_WORDS = 180
 MAX_OPTIONS = 3
 MAX_OTHER_TOOL_CALLS = 2  # tool calls besides Skill
 MAX_TURNS = 4             # Skill call, reply, and slack for one retry

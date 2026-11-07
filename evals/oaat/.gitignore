@@ -1,4 +1,4 @@
-artifacts/
+artifacts*/
 .cache-test-artifacts/
 __pycache__/
 *.log

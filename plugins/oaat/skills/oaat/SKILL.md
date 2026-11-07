@@ -50,7 +50,13 @@ Then **stop and wait**. Say nothing about other items, do not preview what is ne
 - User disagrees or the assumptions were wrong: say so directly, adjust, and restate the question.
 - "Skip", "later", "not now": move it to a parked list and continue.
 - "Stop" or "enough": stop at once and give the wrap-up.
-- Tangent that is not part of the current item: flag it ("This may be a tangent from X. Continue or refocus?") and park it unless the user says to follow it.
+- Tangent that is not part of the current item: park it and reply with only this line, using these exact words and naming the current item as X:
+
+  ```text
+  This may be a tangent from X. Continue or refocus?
+  ```
+
+  Add nothing else: no item header, no repeat of the item, no second question. This line is the one question of the reply. If the user says "refocus", show the current item again in the template; if "continue", follow the tangent first and return to the item afterwards.
 - New items found while discussing: add them to the queue silently; do not interrupt.
 
 ## 5. Wrap up
