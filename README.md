@@ -60,7 +60,7 @@ A plugin cannot register a statusline, so the `milestones` plugin's `/milestones
 ```
 
 - The installed plugin path contains the version (`.../milestones/0.1.0/...`), so the command picks the highest installed version and survives updates.
-- It prints, for example, `To release 1.0 ██▌░░░ 1/4 · ▸ #2 1h12m · next: Storage layer · ⚑ you · ⛔1`, then context, cost, time, plan limits and model. A project without `.cache/milestones.json` shows no milestone segment.
+- It prints, for example, `To release 1.0 ██▌░░░ 1/4 · ▸ #2 1h12m · next: Storage layer · ⚑ you · ⛔1`, then context, credit spend, time, plan limits and model. The credit part (`cost`) shows the estimated session cost only for API-key / console-credit users, `spend $used / $limit` behind a gateway spend limit, and nothing for subscribers (their plan limits are the `5h` / `7d` part). A project without `.cache/milestones.json` shows no milestone segment.
 - Settings: `MILESTONES_STATUSLINE_PARTS` (comma list of `milestones,timing,ctx,cost,time,limits,model`), `MILESTONES_STATUSLINE_BASE` (a shell command whose output comes first), `NO_COLOR` or `MILESTONES_STATUSLINE_COLOR=0` (no colour).
 - `.cache/` should be in your gitignore; the tracker is per checkout.
 

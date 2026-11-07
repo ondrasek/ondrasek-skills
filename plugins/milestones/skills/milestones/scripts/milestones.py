@@ -40,7 +40,8 @@ TOP_KEYS = {"title", "updated", "items"}
 BAR_CELLS = 6
 NEXT_WIDTH = 28
 # Statusline parts, in print order. milestones = title, bar, count, next, needs marker;
-# timing = the current milestone's elapsed time; ctx, cost, time, limits come from the
+# timing = the current milestone's elapsed time; cost = credit spend (see credit_parts: shown
+# for gateway spend limits and non-subscribers only); ctx, cost, time, limits come from the
 # statusline JSON Claude Code sends on stdin (https://code.claude.com/docs/en/statusline#available-data).
 # model = the model's display name, the session's effort level and the configured advisor.
 PARTS = ("milestones", "timing", "ctx", "cost", "time", "limits", "model")
@@ -378,6 +379,27 @@ def _num(obj: object, *path: str) -> float | None:
     return float(obj) if isinstance(obj, (int, float)) and not isinstance(obj, bool) else None
 
 
+def credit_parts(session: dict, on: bool = False) -> list[str]:
+    """The `cost` part: usage-credit consumption, not a session cost estimate.
+    - behind a Claude apps gateway with a spend limit: `spend $used / $limit` (the dollar
+      fields are optional and come later than the percentage: `spend N%` until they do);
+    - a subscriber (a five_hour or seven_day window is present): nothing — the plan limits
+      are what is consumed, the `limits` part shows them;
+    - otherwise (API key, console credits): the session's estimated cost in USD.
+    Claude Code does not expose a subscriber's extra-usage credit spend, so none is shown."""
+    pct = _num(session, "rate_limits", "spend_limit", "used_percentage")
+    if pct is not None:
+        used = _num(session, "rate_limits", "spend_limit", "used_usd")
+        limit = _num(session, "rate_limits", "spend_limit", "limit_usd")
+        text = f"${used:.2f} / ${limit:.2f}" if used is not None and limit is not None else f"{pct:.0f}%"
+        return ["spend " + paint(text, pct_style(pct), on)]
+    if any(_num(session, "rate_limits", w, "used_percentage") is not None
+           for w in ("five_hour", "seven_day")):
+        return []
+    usd = _num(session, "cost", "total_cost_usd")
+    return [f"${usd:.2f}"] if usd is not None else []
+
+
 def usage_parts(session: dict, want: set[str], on: bool = False) -> list[str]:
     """Session usage from Claude Code's statusline JSON (documented fields only:
     https://code.claude.com/docs/en/statusline#available-data). A field that is absent or
@@ -389,9 +411,7 @@ def usage_parts(session: dict, want: set[str], on: bool = False) -> list[str]:
         if pct is not None:
             out.append("ctx " + paint(f"{pct:.0f}%", pct_style(pct), on))
     if "cost" in want:
-        usd = _num(session, "cost", "total_cost_usd")
-        if usd is not None:
-            out.append(f"${usd:.2f}")
+        out += credit_parts(session, on)
     if "time" in want:
         ms = _num(session, "cost", "total_duration_ms")
         if ms is not None:

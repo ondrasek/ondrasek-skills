@@ -57,7 +57,7 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/milestones.py" init --empty --title "Thesis
 `$MILESTONES_STATUSLINE_BASE` names one, then ` │ `). Parts, set with
 `MILESTONES_STATUSLINE_PARTS` (comma list): `milestones` (title, bar, count, next, `⚑ you`, `⛔N`),
 `timing` (the current milestone's elapsed time), and the session usage Claude Code sends on
-stdin — `ctx` (context window used %), `cost` (session cost, USD estimate), `time` (session
+stdin — `ctx` (context window used %), `cost` (credit consumption: `spend $used / $limit` behind a gateway spend limit, the session's estimated USD cost for API-key / console-credit users, nothing for subscribers, whose plan usage `limits` shows; Claude Code does not expose a subscriber's extra-usage credit spend), `time` (session
 wall time), `limits` (5-hour and 7-day plan usage %, present for Pro/Max/Ultra subscribers),
 `model` (the model's display name and the session's effort level from stdin, and the advisor
 from `advisorModel` in the user, project and project-local settings files, e.g.

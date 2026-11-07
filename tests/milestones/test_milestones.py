@@ -31,6 +31,8 @@ SESSION = {
     "rate_limits": {"five_hour": {"used_percentage": 23.5},
                     "seven_day": {"used_percentage": 41.2}},
 }
+# The same session of an API-key / console-credit user: no plan limit windows.
+API_SESSION = {k: v for k, v in SESSION.items() if k != "rate_limits"}
 
 
 def example(**over) -> dict:
@@ -149,11 +151,34 @@ class StatuslineTest(Base):
         self.write(example())
         r = self.run_ms("statusline", "--parts", "ctx,cost,time,limits",
                         stdin=json.dumps(SESSION))
-        self.assertEqual(r.stdout, "ctx 42% · $1.23 · ⏱ 45m · 5h 24% 7d 41%\n")
+        # a subscriber (plan limit windows present): the cost part prints nothing
+        self.assertEqual(r.stdout, "ctx 42% · ⏱ 45m · 5h 24% 7d 41%\n")
 
     def test_usage_without_milestones_file(self):
-        r = self.run_ms("statusline", "--parts", "ctx,cost", stdin=json.dumps(SESSION))
+        r = self.run_ms("statusline", "--parts", "ctx,cost", stdin=json.dumps(API_SESSION))
         self.assertEqual(r.stdout, "ctx 42% · $1.23\n")
+
+    def test_cost_part_by_account_kind(self):
+        def cost(session):
+            return self.run_ms("statusline", "--parts", "cost", stdin=json.dumps(session)).stdout
+
+        self.assertEqual(cost(API_SESSION), "$1.23\n")
+        self.assertEqual(cost(SESSION), "")
+        self.assertEqual(cost(dict(API_SESSION, rate_limits={"seven_day": {"used_percentage": 1}})), "")
+        gateway = dict(API_SESSION, rate_limits={"spend_limit": {
+            "used_percentage": 63, "used_usd": 314.12, "limit_usd": 500}})
+        self.assertEqual(cost(gateway), "spend $314.12 / $500.00\n")
+        # the dollar fields come later than the percentage and may stay absent
+        pct_only = dict(API_SESSION, rate_limits={"spend_limit": {"used_percentage": 63}})
+        self.assertEqual(cost(pct_only), "spend 63%\n")
+        over = dict(API_SESSION, rate_limits={"spend_limit": {"used_percentage": 120}})
+        self.assertEqual(cost(over), "spend 120%\n")
+
+    def test_cost_part_colored_by_spend_utilization(self):
+        gateway = dict(API_SESSION, rate_limits={"spend_limit": {"used_percentage": 85}})
+        out = self.run_ms("statusline", "--parts", "cost", stdin=json.dumps(gateway),
+                          env=dict(self.env, NO_COLOR="", MILESTONES_STATUSLINE_COLOR="1")).stdout
+        self.assertIn("spend " + ESC + "31m85%" + ms.RESET, out)
 
     def test_absent_usage_fields_print_nothing(self):
         session = {"model": {"id": "x"}, "context_window": {"used_percentage": None},
@@ -165,14 +190,15 @@ class StatuslineTest(Base):
     def test_parts_from_environment(self):
         self.write(example())
         env = dict(self.env, MILESTONES_STATUSLINE_PARTS="cost")
-        self.assertEqual(self.run_ms("statusline", stdin=json.dumps(SESSION), env=env).stdout,
+        self.assertEqual(self.run_ms("statusline", stdin=json.dumps(API_SESSION), env=env).stdout,
                          "$1.23\n")
 
     def test_all_parts_by_default(self):
         self.write(example())
         out = self.run_ms("statusline", stdin=json.dumps(SESSION)).stdout
-        for piece in ("To F2/F3", "▸ #2", "ctx 42%", "$1.23", "⏱ 45m", "5h 24%"):
+        for piece in ("To F2/F3", "▸ #2", "ctx 42%", "⏱ 45m", "5h 24%"):
             self.assertIn(piece, out)
+        self.assertNotIn("$", out)  # a subscriber has no session cost on the line
 
     def test_duration_format(self):
         self.assertEqual(ms.duration(30), "<1m")
@@ -579,7 +605,7 @@ class WrapperTest(Base):
         r = self.run_wrapper({})  # HOME has no statusline.sh
         self.assertEqual(r.returncode, 0)
         self.assertTrue(r.stdout.startswith("To F2/F3 "))
-        self.assertIn("ctx 42% · $1.23 · ⏱ 45m · 5h 24% 7d 41%", r.stdout)
+        self.assertIn("ctx 42% · ⏱ 45m · 5h 24% 7d 41%", r.stdout)
 
     def test_failing_base(self):
         self.write(example())
@@ -597,7 +623,7 @@ class WrapperTest(Base):
         self.assertEqual((r.returncode, r.stdout), (0, ""))
         base = self.fake_base("echo B\n")
         r = self.run_wrapper({"MILESTONES_STATUSLINE_BASE": str(base),
-                              "MILESTONES_STATUSLINE_PARTS": "cost"})
+                              "MILESTONES_STATUSLINE_PARTS": "cost"}, json.dumps(API_SESSION))
         self.assertEqual(r.stdout, "B │ $1.23\n")
 
     def test_recursion_guard(self):
@@ -612,7 +638,8 @@ class WrapperTest(Base):
     def test_the_older_worker_names_still_work(self):
         self.write(example())
         base = self.fake_base("echo B\n")
-        r = self.run_wrapper({"WORKER_STATUSLINE_BASE": str(base), "WORKER_STATUSLINE_PARTS": "cost"})
+        r = self.run_wrapper({"WORKER_STATUSLINE_BASE": str(base), "WORKER_STATUSLINE_PARTS": "cost"},
+                             json.dumps(API_SESSION))
         self.assertEqual(r.stdout, "B │ $1.23\n")
 
     def test_the_readme_command_picks_the_newest_installed_version(self):
