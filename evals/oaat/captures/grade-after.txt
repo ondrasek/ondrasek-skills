@@ -1,0 +1,18 @@
+$ python3 python/run_evals.py --fixtures tests/fixtures/traces/after --label after
+id                     kind        expect   trigger  trials  result  failed checks
+explicit-dollar        explicit    item     yes      1/1     PASS    -
+explicit-name          explicit    item     yes      1/1     PASS    -
+implicit-walk          implicit    item     yes      1/1     PASS    -
+implicit-overwhelmed   implicit    item     yes      1/1     PASS    -
+contextual-review      contextual  item     yes      1/1     PASS    -
+followup-skip          followup    skip     yes      1/1     PASS    -
+followup-stop          followup    stop     yes      1/1     PASS    -
+followup-tangent       followup    tangent  yes      1/1     PASS    -
+negative-single        negative    none     no       1/1     PASS    -
+negative-list          negative    list     no       1/1     PASS    -
+negative-one-decision  negative    none     no       1/1     PASS    -
+
+checks passed by group: outcome 43/43, process 22/22, style 37/37, efficiency 30/30
+cost reported by the result events: $0.2270 over 11 runs
+summary: prompts passed 11/11 (every trial), trials passed 11/11, pass rate 100%
+(exit code 0)

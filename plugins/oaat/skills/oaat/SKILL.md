@@ -11,6 +11,8 @@ Address everything waiting on the user without overwhelming them. The user has A
 
 Gather every pending item from the conversation, tool output, notes or files in scope: decisions, open questions, needed clarifications, concerns, risks, unverified assumptions. Dedupe and merge overlapping items.
 
+If the project has a milestone tracker (`.cache/milestones.json` in the project root; read it with Read, it is written by the `milestones` plugin), its items that wait on the user count too: every milestone that is not `done` and is `blocked`, or whose `needs` names the user (`you`). Its `name` is the title and its `left` text the substance. Remember which milestone `id` an item came from. No file, no change.
+
 Do not print the list. Say only how many there are, then start (for example: "5 items need you. First one:").
 
 ## 2. Order
@@ -19,19 +21,31 @@ Put items that block other items or work first, then by impact if left unaddress
 
 ## 3. Present one item
 
-Use this shape, kept short (about 8 lines in total):
+Answer with this template. Keep its labels, their wording and their order, so every reply has the same structure. Keep the reply short, about 8 lines in total.
 
-- **Item N of M, type** (decision, question, risk, ...) and a title of a few words.
-- **What it is:** one or two plain sentences, no background.
-- **Why it matters:** one sentence on the consequence.
-- **Options:** at most 3, each one line, with the trade-off. Mark my recommendation and say why in a few words.
-- **One question:** a single, concrete question the user can answer in a few words.
+```text
+**Item N of M, type: Title**
+**What it is:** one or two plain sentences, no background.
+**Why it matters:** one sentence on the consequence.
+**Options:**
+1. First option, one line, with its trade-off.
+2. Second option, one line, with its trade-off.
+3. Third option, one line, with its trade-off.
+**Recommendation:** Option N, because a few words of reason.
+**One question:** a single, concrete question the user can answer in a few words?
+```
 
-Then **stop and wait**. Do not mention other items, preview what is next, or ask more than one question.
+- **Item N of M, type:** the type is decision, question, risk, and so on. The title has a few words.
+- **Options:** one to three. Number every option 1., 2., 3.
+- **Recommendation:** one line of its own, after the last option. It names the option by its number.
+- **One question:** the only question mark in the reply.
+
+Then **stop and wait**. Say nothing about other items, do not preview what is next, and ask one question.
 
 ## 4. Handle the reply
 
 - Answer given: confirm it in one line, apply or record it, and move to the next item. Do not reopen a settled item unless new information contradicts it.
+- The answered item came from a milestone: record the answer through the `milestones` skill in the same turn, silently (for example clear `needs`, set `blocked` to `doing`, or update `left`). If that plugin is not installed, skip this and do not mention it.
 - User asks for more detail: explain just that, still on the same item, then repeat the question.
 - User disagrees or the assumptions were wrong: say so directly, adjust, and restate the question.
 - "Skip", "later", "not now": move it to a parked list and continue.
@@ -41,11 +55,15 @@ Then **stop and wait**. Do not mention other items, preview what is next, or ask
 
 ## 5. Wrap up
 
-When the queue is empty, or on request, give a compact recap:
+When the queue is empty, or on request, give a compact recap with this template:
 
-- **Decided:** each decision in one line.
-- **Parked:** items skipped or deferred.
-- **Next action:** the single most useful thing to do now.
+```text
+**Decided:** each decision in one line.
+**Parked:** items skipped or deferred.
+**Next action:** the single most useful thing to do now.
+```
+
+With a milestone tracker, the next action is usually the milestone in `doing`, or the first one the answers just unblocked.
 
 ## Rules
 

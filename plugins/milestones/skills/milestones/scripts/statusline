@@ -1,0 +1,57 @@
+#!/bin/sh
+# Claude Code statusline of the `milestones` plugin: an optional base statusline of your own,
+# then " │ " and the milestone segment of milestones.py (the file next to this one).
+#
+# Contract (https://code.claude.com/docs/en/statusline): settings key
+# "statusLine": {"type": "command", "command": …, "padding": N}; Claude Code runs the command
+# in a shell with JSON session data on stdin (model, workspace.current_dir/project_dir, cost.*,
+# context_window.*, rate_limits.*, …) and shows what it prints on stdout, each line a row,
+# ANSI colours allowed — only after the command exits 0 (non-zero or no output = blank). Runs
+# are debounced at 300 ms; a new update cancels the run in flight. COLUMNS is set.
+#
+# Base statusline: only $MILESTONES_STATUSLINE_BASE when set (a shell command; the older name
+# $WORKER_STATUSLINE_BASE works too); by default there is none, the segment stands alone. A base
+# gets the same stdin; its output counts only when it exits 0.
+# Segment parts: $MILESTONES_STATUSLINE_PARTS (comma list of milestones,timing,ctx,cost,time,
+# limits,model; the older name $WORKER_STATUSLINE_PARTS works too); unset, the parts are
+# milestones,timing when a base printed something (the base shows its own usage fields) and all
+# of them otherwise. Colour: ANSI SGR, off with NO_COLOR (set, non-empty) or
+# MILESTONES_STATUSLINE_COLOR=0.
+
+# A base that points back at this wrapper ends here instead of recursing.
+[ -n "$MILESTONES_STATUSLINE_INNER" ] && exit 0
+MILESTONES_STATUSLINE_INNER=1
+export MILESTONES_STATUSLINE_INNER
+
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd) || exit 0
+
+# stdin is read once, here; both commands get this copy (a terminal on stdin: no input).
+if [ -t 0 ]; then input=; else input=$(cat); fi
+
+base=${MILESTONES_STATUSLINE_BASE:-${WORKER_STATUSLINE_BASE:-}}
+
+out=
+if [ -n "$base" ]; then
+  out=$(printf '%s\n' "$input" | sh -c "$base" 2>/dev/null) || out=
+fi
+
+if [ -n "${MILESTONES_STATUSLINE_PARTS+x}" ]; then
+  parts=$MILESTONES_STATUSLINE_PARTS
+elif [ -n "${WORKER_STATUSLINE_PARTS+x}" ]; then
+  parts=$WORKER_STATUSLINE_PARTS
+elif [ -n "$out" ]; then
+  parts=milestones,timing
+else
+  parts=milestones,timing,ctx,cost,time,limits,model
+fi
+
+seg=$(printf '%s\n' "$input" | python3 "$here/milestones.py" statusline --parts "$parts" 2>/dev/null) || seg=
+
+if [ -n "$out" ] && [ -n "$seg" ]; then
+  printf '%s │ %s\n' "$out" "$seg"
+elif [ -n "$out" ]; then
+  printf '%s\n' "$out"
+elif [ -n "$seg" ]; then
+  printf '%s\n' "$seg"
+fi
+exit 0

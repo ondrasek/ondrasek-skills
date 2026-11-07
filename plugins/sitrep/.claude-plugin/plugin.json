@@ -1,7 +1,7 @@
 {
   "name": "sitrep",
   "description": "Turn all open items, risks and concerns into a temporary visual HTML situation report (priority matrix, dependency map, cards), built for visual thinkers with ADHD.",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "author": {
     "name": "Ondrej Krajicek",
     "url": "https://github.com/ondrasek"

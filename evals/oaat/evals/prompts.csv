@@ -1,0 +1,82 @@
+id,should_trigger,kind,expect,prompt,reply
+explicit-dollar,true,explicit,item,"Use $oaat. I have several things waiting on me before the release and I need to get through them.
+
+Pending items:
+- Pick the database: Postgres or SQLite for the first release.
+- Confirm the launch date: Marketing needs a date by Friday.
+- Assign the security review: Nobody owns the external audit yet.
+- Rename the staging branch: The old name confuses new hires.
+- Approve the logo change: Design sent two variants last week.
+",
+explicit-name,true,explicit,item,"Please use the oaat skill on the list below.
+
+Pending items:
+- Choose the test framework: The team is split between pytest and unittest.
+- Set the retry limit: The client retries without a limit today.
+- Decide on the licence: The repository has no licence file.
+- Pick a release day: Releases on Friday caused two incidents.
+",
+implicit-walk,true,implicit,item,"Walk me through what's pending, one at a time. Do not dump it all on me.
+
+Pending items:
+- Choose the test framework: The team is split between pytest and unittest.
+- Set the retry limit: The client retries without a limit today.
+- Decide on the licence: The repository has no licence file.
+- Pick a release day: Releases on Friday caused two incidents.
+",
+implicit-overwhelmed,true,implicit,item,"I am overwhelmed by all the open questions. Can we go through them one by one?
+
+Pending items:
+- Approve the budget: The cloud estimate is 20 percent above plan.
+- Choose the cloud region: Latency and data rules point to different regions.
+- Confirm the on-call rota: Two engineers are on leave in December.
+- Review the data retention risk: Logs keep customer emails for two years.
+- Answer the vendor email: The vendor asks for a decision on the support tier.
+",
+contextual-review,true,contextual,item,"The design review just ended. These items are now waiting on me and each blocks a different part of the launch. Help me get through them.
+
+Pending items:
+- Pick the database: Postgres or SQLite for the first release.
+- Confirm the launch date: Marketing needs a date by Friday.
+- Assign the security review: Nobody owns the external audit yet.
+- Rename the staging branch: The old name confuses new hires.
+- Approve the logo change: Design sent two variants last week.
+",
+followup-skip,true,followup,skip,"Use the oaat skill on the list below. I have several things waiting on me and I want to go through them one at a time.
+
+Pending items:
+- Pick the database: Postgres or SQLite for the first release.
+- Confirm the launch date: Marketing needs a date by Friday.
+- Assign the security review: Nobody owns the external audit yet.
+- Rename the staging branch: The old name confuses new hires.
+- Approve the logo change: Design sent two variants last week.
+","skip, later."
+followup-stop,true,followup,stop,"Use the oaat skill on the list below. I have several things waiting on me and I want to go through them one at a time.
+
+Pending items:
+- Pick the database: Postgres or SQLite for the first release.
+- Confirm the launch date: Marketing needs a date by Friday.
+- Assign the security review: Nobody owns the external audit yet.
+- Rename the staging branch: The old name confuses new hires.
+- Approve the logo change: Design sent two variants last week.
+","stop, enough for today."
+followup-tangent,true,followup,tangent,"Use the oaat skill on the list below. I have several things waiting on me and I want to go through them one at a time.
+
+Pending items:
+- Pick the database: Postgres or SQLite for the first release.
+- Confirm the launch date: Marketing needs a date by Friday.
+- Assign the security review: Nobody owns the external audit yet.
+- Rename the staging branch: The old name confuses new hires.
+- Approve the logo change: Design sent two variants last week.
+","by the way, which container runtime do you like best, podman or docker?"
+negative-single,false,negative,none,What is the difference between a Containerfile and a Dockerfile? Answer in two sentences.,
+negative-list,false,negative,list,"Show me the full list of everything pending as a table. I want to see all of it at once.
+
+Pending items:
+- Pick the database: Postgres or SQLite for the first release.
+- Confirm the launch date: Marketing needs a date by Friday.
+- Assign the security review: Nobody owns the external audit yet.
+- Rename the staging branch: The old name confuses new hires.
+- Approve the logo change: Design sent two variants last week.
+",
+negative-one-decision,false,negative,none,I have one decision to make: should the first release use Postgres or SQLite? Give me your recommendation in two sentences.,

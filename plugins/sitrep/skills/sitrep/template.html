@@ -60,6 +60,11 @@
   .next .label { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink2); font-weight: 600; }
   .next .title { font-size: 20px; font-weight: 600; margin: 2px 0; }
 
+  .ms { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 20px; margin-top: 12px; }
+  .ms .label { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink2); font-weight: 600; }
+  .ms .bar { height: 8px; border-radius: 999px; background: var(--line); margin: 8px 0 6px; overflow: hidden; }
+  .ms .bar > i { display: block; height: 100%; background: var(--focus); }
+
   .chips { display: flex; flex-wrap: wrap; gap: 8px; }
   .chip { display: inline-flex; align-items: center; gap: 6px; background: var(--surface);
     border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px 4px 6px; }
@@ -309,6 +314,15 @@
     if (D.next && D.next.title) {
       out.appendChild(h("div", { class: "next" }, h("div", { class: "label" }, "Start here"),
         h("div", { class: "title" }, String(D.next.title)), D.next.why && h("p", { class: "muted" }, String(D.next.why))));
+    }
+    var M = D.milestones;
+    if (M && typeof M === "object" && Number(M.total) > 0) {
+      var total = Number(M.total), done = Math.max(0, Math.min(total, Number(M.done) || 0));
+      var bar = h("div", { class: "bar", role: "progressbar", "aria-valuemin": "0", "aria-valuemax": String(total),
+        "aria-valuenow": String(done), "aria-label": "Milestones done" }, h("i", { style: "width:" + Math.round(100 * done / total) + "%" }));
+      out.appendChild(h("div", { class: "ms" }, h("div", { class: "label" }, "Milestones" + (M.title ? ": " + String(M.title) : "")), bar,
+        h("p", { class: "small muted" }, done + " of " + total + " done" + (M.current ? " · now: " + String(M.current) : "") +
+          (M.needsYou ? " · " + Number(M.needsYou) + " wait for you" : "") + (M.blocked ? " · " + Number(M.blocked) + " blocked" : ""))));
     }
     return out;
   }

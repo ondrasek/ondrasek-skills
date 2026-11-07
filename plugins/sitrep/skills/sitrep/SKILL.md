@@ -11,7 +11,13 @@ Show the whole situation at a glance for a visual thinker with ADHD. Output is a
 
 Gather every open item from the conversation, tool output, notes and files in scope: decisions, questions, clarifications, concerns, risks, blockers, unverified assumptions. Dedupe and merge overlaps. Note which items must be settled before others (`dependsOn`).
 
-Rate each item **impact** and **urgency** from 1 (low) to 3 (high). Pick the single best next action for the "start here" card: blockers and items that unlock others first.
+If the project has a milestone tracker (`.cache/milestones.json` in the project root; read it with Read, it is written by the `milestones` plugin), take it in too. It is optional: no file, no change.
+
+- Every milestone that is not `done` and is `blocked`, or whose `needs` names the user (`you`), is an open item: type `blocker` for `blocked`, `decision` otherwise; `detail` from its `left` text; `status: "blocked"` for `blocked`. Give these high urgency (3) and use a stable id such as `ms-<id>`.
+- Milestones that are only `todo` or `doing` and need nobody are not items. Put them in the progress strip instead: `milestones: { title, done, total, current, needsYou, blocked }` (see [schema.md](schema.md)). `current` is the name of the milestone in `doing`.
+- A milestone item `dependsOn` nothing unless another open item must be settled first.
+
+Rate each item **impact** and **urgency** from 1 (low) to 3 (high). Pick the single best next action for the "start here" card: blockers and items that unlock others first. A `blocked` milestone that waits for the user is a strong candidate.
 
 Keep text short: titles of a few words, `detail` one or two sentences. If there are more than about 15 items, merge small ones or mark minor ones `parked`.
 
@@ -39,7 +45,7 @@ The user may paste JSON from the report's **Copy JSON** button: `{"sitrep": "...
 
 - Treat each `comment` as the user's answer or thoughts on the item with that `id`. Refer to items by number and title.
 - Answer briefly per item: what you will do or have done. Ask a follow-up only where a comment is unclear, one question at a time.
-- Apply decisions you can apply. Treat `resolved: true` as settled and do not reopen it.
+- Apply decisions you can apply. Treat `resolved: true` as settled and do not reopen it. When a resolved or answered item has the id `ms-<n>`, update that milestone through the `milestones` skill (for example clear `needs`, or set it `doing`); if that plugin is not installed, say so in one line and leave the tracker alone.
 - Then offer to regenerate the report: overwrite `DIR/data.js` in the same directory if it still exists, drop settled items, add new items the comments raised, and keep every surviving `id` unchanged. The page remembers comments by `id` in the browser, so stable ids keep unsent comments in place.
 
 ## 5. Clean up

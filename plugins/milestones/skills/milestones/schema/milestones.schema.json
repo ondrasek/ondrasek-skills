@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ondrasek/ondrasek-skills/plugins/milestones/schema/milestones.schema.json",
+  "title": ".cache/milestones.json",
+  "description": "The milestone tracker of one checkout: what has to be completed before the work can go on. The agent session writes it through scripts/milestones.py; the Claude Code statusline (scripts/statusline) and the /milestones skill read it. Per checkout and gitignored (.cache/). milestones.py validates the same rules without a library (the statusline runs it on every refresh); tests/milestones/test_milestones.py keeps the two in step.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["title", "items"],
+  "properties": {
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "description": "What the milestones lead to, short: it opens the statusline segment (\"To F2/F3\")."
+    },
+    "updated": {
+      "type": "string",
+      "description": "ISO 8601 time of the last write by milestones.py."
+    },
+    "items": {
+      "type": "array",
+      "description": "The milestones in the order they are to be completed.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name", "state"],
+        "properties": {
+          "id": {"type": "integer", "minimum": 1, "description": "Stable number, unique in the file; `set` and `remove` take it."},
+          "name": {"type": "string", "minLength": 1, "description": "The milestone, a few words."},
+          "state": {"enum": ["done", "doing", "todo", "blocked"], "description": "done counts full on the bar, doing half."},
+          "left": {"type": "string", "description": "What is left to complete it."},
+          "needs": {"type": "string", "description": "Who must act, e.g. you; an item that needs the user puts a marker on the statusline."},
+          "started": {"type": "string", "description": "ISO 8601 time the item first went to doing (written by milestones.py)."},
+          "finished": {"type": "string", "description": "ISO 8601 time the item went to done (written by milestones.py; removed when it leaves done)."}
+        }
+      }
+    }
+  }
+}

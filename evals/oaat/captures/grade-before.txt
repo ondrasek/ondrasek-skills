@@ -1,0 +1,38 @@
+$ python3 python/run_evals.py --fixtures tests/fixtures/traces/before --label before
+id                     kind        expect   trigger  trials  result  failed checks
+explicit-dollar        explicit    item     yes      1/1     PASS    -
+explicit-name          explicit    item     yes      1/1     PASS    -
+implicit-walk          implicit    item     yes      0/1     FAIL    skill-trigger, one-header, header-number, header-total, sections, options-max-3, options-numbered, recommended-marked, one-question, no-other-items
+implicit-overwhelmed   implicit    item     yes      1/1     PASS    -
+contextual-review      contextual  item     yes      0/1     FAIL    options-max-3, one-question, no-preview
+followup-skip          followup    skip     yes      0/1     FAIL    header-number
+followup-stop          followup    stop     yes      0/1     FAIL    wrapup-headings
+followup-tangent       followup    tangent  yes      1/1     PASS    -
+negative-single        negative    none     no       1/1     PASS    -
+negative-list          negative    list     no       0/1     FAIL    skill-trigger, all-items-listed, no-oaat-header
+negative-one-decision  negative    none     no       1/1     PASS    -
+
+failures:
+  implicit-walk trial 1: skill-trigger: Skill tool called for oaat: 0 time(s); expected at least 1
+  implicit-walk trial 1: one-header: 'Item N of M' headers in the reply: 0; expected exactly 1
+  implicit-walk trial 1: header-number: expected the header 'Item 1 of M'; the reply has 0 headers
+  implicit-walk trial 1: header-total: no header or no pending items to compare (items in prompt: 4)
+  implicit-walk trial 1: sections: missing: what it is, why it matters, options, one question; in order: True
+  implicit-walk trial 1: options-max-3: options listed: 0; allowed 1 to 3
+  implicit-walk trial 1: options-numbered: option lines 0; they must be numbered 1, 2, 3 (numbers found: none)
+  implicit-walk trial 1: recommended-marked: lines with a recommendation between Options and the question: 0; expected exactly 1
+  implicit-walk trial 1: one-question: question marks in the reply: 0; expected exactly 1
+  implicit-walk trial 1: no-other-items: pending titles quoted in the reply: 4 (Choose the test framework; Set the retry limit; Decide on the licence; Pick a release day); allowed at most 1
+  contextual-review trial 1: options-max-3: options listed: 4; allowed 1 to 3
+  contextual-review trial 1: one-question: question marks in the reply: 2; expected exactly 1
+  contextual-review trial 1: no-preview: extra item numbers: 0; look-ahead phrases: next up
+  followup-skip trial 1: header-number: header says item 1; expected item 2
+  followup-stop trial 1: wrapup-headings: missing: next action; in order: True
+  negative-list trial 1: skill-trigger: Skill tool called for oaat: 1 time(s); expected 0
+  negative-list trial 1: all-items-listed: pending titles missing from the reply: 4 of 5
+  negative-list trial 1: no-oaat-header: 'Item N of M' headers in the reply: 1; expected 0
+
+checks passed by group: outcome 35/43, process 20/22, style 29/37, efficiency 30/30
+cost reported by the result events: $0.2270 over 11 runs
+summary: prompts passed 6/11 (every trial), trials passed 6/11, pass rate 54%
+(exit code 1)

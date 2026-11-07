@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Rubric verdict for one reply of the skill under test",
+  "type": "object",
+  "properties": {
+    "overall_pass": {"type": "boolean"},
+    "score": {"type": "integer", "minimum": 0, "maximum": 100},
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string"},
+          "pass": {"type": "boolean"},
+          "notes": {"type": "string"}
+        },
+        "required": ["id", "pass", "notes"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["overall_pass", "score", "checks"],
+  "additionalProperties": false
+}

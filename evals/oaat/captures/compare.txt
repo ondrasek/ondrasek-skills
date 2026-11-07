@@ -1,0 +1,16 @@
+$ python3 python/report.py before.json after.json
+id                     before  after   verdict  check changes
+explicit-dollar        1/1     1/1     same     -
+explicit-name          1/1     1/1     same     -
+implicit-walk          0/1     1/1     better   fixed: header-number, header-total, no-other-items, one-header, one-question, options-max-3, options-numbered, recommended-marked, sections, skill-trigger
+implicit-overwhelmed   1/1     1/1     same     -
+contextual-review      0/1     1/1     better   fixed: no-preview, one-question, options-max-3
+followup-skip          0/1     1/1     better   fixed: header-number
+followup-stop          0/1     1/1     better   fixed: wrapup-headings
+followup-tangent       1/1     1/1     same     -
+negative-single        1/1     1/1     same     -
+negative-list          0/1     1/1     better   fixed: all-items-listed, no-oaat-header, skill-trigger
+negative-one-decision  1/1     1/1     same     -
+
+summary: 5 better, 0 worse, 6 same
+(exit code 0)
