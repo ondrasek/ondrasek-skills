@@ -1,4 +1,4 @@
-# ai-agent-skills
+# ondrasek-skills
 
 Claude Code plugin marketplace (`ondrasek-skills`) holding personal agent skills.
 

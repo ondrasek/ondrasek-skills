@@ -1,15 +1,15 @@
-# ai-agent-skills
+# ondrasek-skills
 
 Personal collection of AI agent skills, packaged as a [Claude Code plugin marketplace](https://code.claude.com/docs/en/plugin-marketplaces).
 
 ## Install
 
 ```
-/plugin marketplace add ondrasek/ai-agent-skills
+/plugin marketplace add ondrasek/ondrasek-skills
 /plugin install <plugin>@ondrasek-skills
 ```
 
-On Claude Code 2.1.275+ this works in one step, e.g. `/plugin install oaat --marketplace ondrasek/ai-agent-skills` or `/plugin install sitrep --marketplace ondrasek/ai-agent-skills`
+On Claude Code 2.1.275+ this works in one step, e.g. `/plugin install oaat --marketplace ondrasek/ondrasek-skills` or `/plugin install sitrep --marketplace ondrasek/ondrasek-skills`
 
 ## Layout
 
