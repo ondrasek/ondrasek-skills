@@ -64,6 +64,10 @@ A plugin cannot register a statusline, so the `milestones` plugin's `/milestones
 - Settings: `MILESTONES_STATUSLINE_PARTS` (comma list of `milestones,timing,ctx,cost,time,limits,model`), `MILESTONES_STATUSLINE_BASE` (a shell command whose output comes first), `NO_COLOR` or `MILESTONES_STATUSLINE_COLOR=0` (no colour).
 - `.cache/` should be in your gitignore; the tracker is per checkout.
 
+## The stale-tracker reminder
+
+The `milestones` plugin registers a `Stop` hook (`hooks/milestones-reminder.sh`, needs `jq` and `git`). After a turn it nudges the agent to update the tracker when all of these hold: a milestone is `doing`, the tracker file is at least 30 minutes old (`MILESTONES_STALE_MINUTES`), and the repository changed after it (uncommitted paths outside `.cache/`, or a newer commit). It nudges at most once per window. It does nothing in a project without a tracker. If you had the same hook in `~/.claude/settings.json`, remove that entry: the plugin one replaces it.
+
 ## Tests and evals
 
 ```
@@ -87,4 +91,4 @@ make -C evals/oaat eval ARGS="--only explicit-name --trials 1"   # a REAL run: o
 | --- | --- |
 | `oaat` | Walks through pending decisions, questions and risks strictly one at a time (ADHD-friendly), in a fixed reply template; picks up milestones that wait on you. Invoke with `/oaat` or `/oaat:oaat`. |
 | `sitrep` | Builds a temporary, self-contained HTML situation report of everything open (Focus / Matrix / Map / All tabs). Add comments per item in the page, then **Copy JSON** and paste it back into Claude. Invoke with `/sitrep` or `/sitrep:sitrep`. Shows milestone progress when a tracker exists. Output goes to a temp dir and is deleted on request. |
-| `milestones` | A per-project milestone tracker (`.cache/milestones.json`): `/milestones` shows a table with a progress bar, durations and who must act; the agent keeps it current. Optional colour statusline segment (see above). Invoke with `/milestones` or `/milestones:milestones`. |
+| `milestones` | A per-project milestone tracker (`.cache/milestones.json`): `/milestones` shows a table with a progress bar, durations and who must act; the agent keeps it current. Optional colour statusline segment (see above) and a stale-tracker reminder hook. Invoke with `/milestones` or `/milestones:milestones`. |

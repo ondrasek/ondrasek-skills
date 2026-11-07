@@ -8,7 +8,7 @@ Claude Code plugin marketplace (`ondrasek-skills`) holding personal agent skills
 - `plugins/<name>/.claude-plugin/plugin.json` — plugin manifest.
 - `plugins/<name>/skills/<skill>/SKILL.md` — skills; `description` frontmatter drives triggering.
 
-- `tests/milestones/` — unit tests of the `milestones` plugin.
+- `tests/milestones/` — unit tests of the `milestones` plugin (script, statusline, `hooks/` reminder).
 - `evals/oaat/` — eval harness for the live `plugins/oaat` skill (ported from the PA015 sample).
 
 ## Rules

@@ -26,8 +26,8 @@
     {
       "name": "milestones",
       "source": "./plugins/milestones",
-      "description": "A per-project milestone tracker (.cache/milestones.json) with a /milestones table, a progress bar and a colour statusline segment that shows what is left and who must act.",
-      "version": "0.1.0",
+      "description": "A per-project milestone tracker (.cache/milestones.json) with a /milestones table, a progress bar and a colour statusline segment that shows what is left and who must act, and a Stop hook that nudges when the tracker is stale.",
+      "version": "0.2.0",
       "category": "productivity"
     }
   ]
