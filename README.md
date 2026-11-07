@@ -68,10 +68,21 @@ A plugin cannot register a statusline, so the `milestones` plugin's `/milestones
 
 The `milestones` plugin registers a `Stop` hook (`hooks/milestones-reminder.sh`, needs `jq` and `git`). After a turn it nudges the agent to update the tracker when all of these hold: a milestone is `doing`, the tracker file is at least 30 minutes old (`MILESTONES_STALE_MINUTES`), and the repository changed after it (uncommitted paths outside `.cache/`, or a newer commit). It nudges at most once per window. It does nothing in a project without a tracker. If you had the same hook in `~/.claude/settings.json`, remove that entry: the plugin one replaces it.
 
+## The git hook plugins
+
+Two small plugins, each with one hook, independent of each other. Both need `jq`; `auto-commit` also needs `git` (and uses `gitleaks` when installed).
+
+- **`auto-commit`**: a `Stop` hook. After each turn it checks the repository (untracked, unstaged and staged changes, unpushed commits, remote commits not merged, `.env` files, secrets that `gitleaks` finds in unpushed commits). If the repository is not saved and in sync, it blocks the stop once and tells the agent to snapshot the work in a Conventional Commit and sync with origin: merge only, no rebase, stash or squash, no force push, no `--no-verify`, no `.env` files. `.cache/` is ignored. **This makes the agent commit and push without asking, in every project where the plugin is enabled**; enable it per project if that is too much.
+- **`block-force-push`**: a `PreToolUse` hook on `Bash`. It denies `git push --force`, `-f` (also inside option clusters such as `-fu`) and `--force-with-lease`, and tells the agent to ask you first. It matches the command text, so it is a safety net, not a security boundary: a force push hidden behind an alias, a script or a variable passes, and a command that merely contains such text (for example inside a heredoc) is blocked.
+
+If you have the same hooks in `~/.claude/settings.json` or `~/.claude/hooks/`, remove them after installing the plugins, otherwise `auto-commit` reports twice.
+
 ## Tests and evals
 
 ```
 python3 -m unittest discover -s tests/milestones -v   # milestones plugin
+python3 -m unittest discover -s tests/auto-commit -v   # auto-commit plugin (slow: about 80 s)
+python3 -m unittest discover -s tests/block-force-push -v
 make -C evals/oaat test                                # oaat eval harness, offline, no model call
 make -C evals/oaat eval ARGS="--only explicit-name --trials 1"   # a REAL run: one model call on your account
 ```
@@ -92,3 +103,5 @@ make -C evals/oaat eval ARGS="--only explicit-name --trials 1"   # a REAL run: o
 | `oaat` | Walks through pending decisions, questions and risks strictly one at a time (ADHD-friendly), in a fixed reply template; picks up milestones that wait on you. Invoke with `/oaat` or `/oaat:oaat`. |
 | `sitrep` | Builds a temporary, self-contained HTML situation report of everything open (Focus / Matrix / Map / All tabs). Add comments per item in the page, then **Copy JSON** and paste it back into Claude. Invoke with `/sitrep` or `/sitrep:sitrep`. Shows milestone progress when a tracker exists. Output goes to a temp dir and is deleted on request. |
 | `milestones` | A per-project milestone tracker (`.cache/milestones.json`): `/milestones` shows a table with a progress bar, durations and who must act; the agent keeps it current. Optional colour statusline segment (see above) and a stale-tracker reminder hook. Invoke with `/milestones` or `/milestones:milestones`. |
+| `auto-commit` | Stop hook: after each turn, makes the agent snapshot uncommitted work in a Conventional Commit and keep the branch in sync with origin (merge only; no `.env` files or secrets). It pushes without asking: see "The git hook plugins". |
+| `block-force-push` | PreToolUse hook: denies force pushes (`--force`, `-f`, `--force-with-lease`) and tells the agent to ask you first. A text match, not a security boundary. |

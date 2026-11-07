@@ -1,0 +1,9 @@
+{
+  "name": "auto-commit",
+  "description": "After each turn, tell the agent to snapshot uncommitted work in a Conventional Commit and keep the branch in sync with origin: merge only, no history rewrites, no .env files, no secrets.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Ondrej Krajicek",
+    "url": "https://github.com/ondrasek"
+  }
+}

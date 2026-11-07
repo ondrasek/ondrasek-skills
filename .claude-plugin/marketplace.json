@@ -29,6 +29,20 @@
       "description": "A per-project milestone tracker (.cache/milestones.json) with a /milestones table, a progress bar and a colour statusline segment that shows what is left and who must act, and a Stop hook that nudges when the tracker is stale.",
       "version": "0.2.0",
       "category": "productivity"
+    },
+    {
+      "name": "auto-commit",
+      "source": "./plugins/auto-commit",
+      "description": "After each turn, tell the agent to snapshot uncommitted work in a Conventional Commit and keep the branch in sync with origin: merge only, no history rewrites, no .env files, no secrets.",
+      "version": "0.1.0",
+      "category": "productivity"
+    },
+    {
+      "name": "block-force-push",
+      "source": "./plugins/block-force-push",
+      "description": "Block git force pushes (--force, -f, --force-with-lease) before the agent runs them, and tell it to ask the user first.",
+      "version": "0.1.0",
+      "category": "security"
     }
   ]
 }

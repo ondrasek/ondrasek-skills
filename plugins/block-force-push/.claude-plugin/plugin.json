@@ -1,0 +1,9 @@
+{
+  "name": "block-force-push",
+  "description": "Block git force pushes (--force, -f, --force-with-lease) before the agent runs them, and tell it to ask the user first.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Ondrej Krajicek",
+    "url": "https://github.com/ondrasek"
+  }
+}

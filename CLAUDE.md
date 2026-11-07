@@ -9,6 +9,7 @@ Claude Code plugin marketplace (`ondrasek-skills`) holding personal agent skills
 - `plugins/<name>/skills/<skill>/SKILL.md` — skills; `description` frontmatter drives triggering.
 
 - `tests/milestones/` — unit tests of the `milestones` plugin (script, statusline, `hooks/` reminder).
+- `tests/auto-commit/`, `tests/block-force-push/` — tests of the two git hook plugins (`plugins/<name>/hooks/`).
 - `evals/oaat/` — eval harness for the live `plugins/oaat` skill (ported from the PA015 sample).
 
 ## Rules
@@ -21,3 +22,4 @@ Claude Code plugin marketplace (`ondrasek-skills`) holding personal agent skills
 - Never run `make -C evals/oaat eval` unasked: it spends model calls on the user's account.
 - `oaat` and `sitrep` read `.cache/milestones.json` and write it only through the `milestones` skill; never hardcode another plugin's path.
 - A plugin cannot register a statusline: it is a user setting (recipe in `README.md`).
+- Bash commands containing force-push text (even in a heredoc) are blocked by the user-level force-push hook: write such test data and docs with the Write or Edit tool.
