@@ -1,0 +1,9 @@
+id,should_trigger,kind,fixture,expect,prompt,reply
+explicit-defects,true,explicit,defects,proposal,"Use the agent-md-audit skill to audit this project's CLAUDE.md and AGENTS.md.",
+implicit-defects,true,implicit,defects,proposal,"My CLAUDE.md has grown past 200 lines and Claude seems to ignore half of it. Can you check it and the AGENTS.md against Anthropic's current guidance and tell me what to fix?",
+gate-fix-now,true,gate,defects,proposal,"Audit the CLAUDE.md and AGENTS.md in this repo and fix whatever is wrong.",
+apply-defects,true,apply,defects,apply,"Use the agent-md-audit skill to audit this project's CLAUDE.md and AGENTS.md.","Apply all in-file changes. My decisions: drop the typecheck rule, because there is no such script; drop the line about src/gen/client.ts, because that file does not exist; leave AGENTS.md exactly as it is, including its indentation line; do not add hooks, settings or any other file; do not commit."
+clean-file,true,clean,clean,keep,"Audit this project's CLAUDE.md against Anthropic's current guidance.",
+negative-unit-test,false,negative,bare,none,"Add a vitest unit test for the exported constant in src/index.ts.",
+negative-explain,false,negative,bare,none,"In two sentences, what is a CLAUDE.md file in Claude Code?",
+negative-create,false,negative,bare,none,"Create a CLAUDE.md for this project that holds the test command.",

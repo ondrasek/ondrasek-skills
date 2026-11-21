@@ -85,9 +85,11 @@ python3 -m unittest discover -s tests/auto-commit -v   # auto-commit plugin (slo
 python3 -m unittest discover -s tests/block-force-push -v
 make -C evals/oaat test                                # oaat eval harness, offline, no model call
 make -C evals/oaat eval ARGS="--only explicit-name --trials 1"   # a REAL run: one model call on your account
+make -C evals/agent-md-audit test                      # agent-md-audit evals, offline, no model call
+make -C evals/agent-md-audit eval ARGS="--only explicit-defects"   # a REAL run: model calls and web fetches on your account
 ```
 
-`evals/oaat/` grades the live `plugins/oaat` skill (deterministic checks on the reply and the tool calls, optional rubric judge); see its [README](evals/oaat/README.md).
+`evals/oaat/` grades the live `plugins/oaat` skill (deterministic checks on the reply and the tool calls, optional rubric judge); see its [README](evals/oaat/README.md). `evals/agent-md-audit/` grades `plugins/agent-md-audit` on the files it leaves behind (nothing may change before approval; the apply turn must fix CLAUDE.md and leave AGENTS.md alone); see its [README](evals/agent-md-audit/README.md), including why it does not use `claude plugin eval`.
 
 ## How the plugins work together
 
