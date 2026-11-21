@@ -1,7 +1,7 @@
 {
   "name": "agent-md-audit",
   "description": "Audit local CLAUDE.md and AGENTS.md files against the current Anthropic guidelines (fetched live every run), propose fixes, and apply them only after the user agrees. May prune hard or overhaul a file.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": {
     "name": "Ondrej Krajicek",
     "url": "https://github.com/ondrasek"
