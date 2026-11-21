@@ -138,10 +138,13 @@ def bash_mutates(command):
 
 
 def table_rows(reply):
-    """Data rows of Markdown tables in the reply (header and separator lines excluded)."""
+    """(findings rows, table lines): findings rows are table rows whose first cell is a number, as in the skill's findings table.
+
+    Other tables in the reply (the discovery table, a header, a separator) do not count.
+    """
     lines = [l.strip() for l in reply.splitlines() if l.strip().startswith("|")]
-    separators = [l for l in lines if re.fullmatch(r"\|[\s:|-]+\|", l)]
-    return max(len(lines) - len(separators) - (1 if separators else 0), 0), len(lines)
+    rows = [l for l in lines if re.match(r"\|\s*\d+\s*\|", l)]
+    return len(rows), len(lines)
 
 
 def found(reply, *patterns):

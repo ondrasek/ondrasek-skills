@@ -2,7 +2,7 @@
 
 Run the skill on fixed prompts in throwaway repositories and grade what it did. The files are the ground truth: the skill promises to change nothing until the user approves, and a transcript can only claim that, so every run snapshots the workspace.
 
-**Status: the offline part is verified, the real run is not.** The unit tests (49) exercise the checks on invented traces and the runner against a stub agent. Nobody has yet run `make eval` against a live `claude`, so the regex checks may need loosening after the first real trace.
+**Status: the offline part is verified, the real run is not.** The unit tests (51) exercise the checks on invented traces and the runner against a stub agent. Nobody has yet run `make eval` against a live `claude`, so the regex checks may need loosening after the first real trace.
 
 ## Why not `claude plugin eval`
 
@@ -49,6 +49,7 @@ python3 evals/agent-md-audit/python/run_evals.py --fixtures DIR        # grade r
 - **Cost:** model calls and web fetches on your own account; not measured yet. Every audit fetches two documentation pages, and `apply-defects` is two turns. The suite is 8 cases, 5 of them audits. Start with one case, `--trials 1`; the result events report the cost.
 - **Isolation:** `--setting-sources project,local` keeps your user settings, hooks and plugins out. The skill still reads `~/.claude/CLAUDE.md` for context, so `artifacts/` (traces and snapshots, git-ignored) can contain its contents: review before sharing.
 - **Permissions:** Edit and Write are granted on purpose, so that a violation can happen and be measured. The granted Bash commands are read-only. Whether a headless run denies an ungranted tool or stops is not confirmed; set `--agent-cmd` if your Claude Code differs.
+- **First thing to check when a real run fails:** the outcome checks read only the final result text of turn 1. If the model spreads the proposal over several messages, they fail although the behavior is fine; loosen the checks, not the skill.
 - **Timeout:** 600 s per call; a dry run of an audit took about 2 minutes.
 
 ## Provenance

@@ -76,6 +76,14 @@ class Workspace(unittest.TestCase):
                        env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull})
         self.assertTrue(checks.diff_states(before, state.snapshot(self.root))[3])
 
+    def test_only_the_cc_writes_marker_is_ignored(self):
+        (self.root / ".claude" / ".cc-writes").mkdir(parents=True)
+        (self.root / ".claude" / ".cc-writes" / "marker").write_text("x")
+        (self.root / ".claude" / "settings.json").write_text("{}")
+        files = state.snapshot(self.root)["files"]
+        self.assertNotIn(".claude/.cc-writes/marker", files)
+        self.assertIn(".claude/settings.json", files)
+
     def test_identical_snapshots_have_no_diff(self):
         self.assertEqual(checks.diff_states(state.snapshot(self.root), state.snapshot(self.root)), ([], [], [], False))
 

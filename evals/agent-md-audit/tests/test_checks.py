@@ -147,6 +147,13 @@ class Helpers(unittest.TestCase):
         self.assertEqual(checks.table_rows(PARTS["table"])[0], 3)
         self.assertEqual(checks.table_rows("no table")[0], 0)
 
+    def test_a_discovery_table_does_not_count_as_findings(self):
+        discovery = "| File | Lines |\n| - | - |\n| CLAUDE.md | 9 |\n"
+        findings = "| # | Problem |\n| - | - |\n| 1 | a |\n| 2 | b |\n"
+        reply = f"Verdict: CLAUDE.md keep. Source: {DOCS}\n\n{discovery}\n{findings}"
+        self.assertEqual(checks.table_rows(reply)[0], 2)
+        self.assertTrue(run("keep", reply1=reply)["clean-not-overhauled"][0])
+
     def test_the_original_fixture_is_229_lines(self):
         self.assertEqual(helpers.state.entry(helpers.fixtures.build("defects")["CLAUDE.md"].encode())["lines"], ORIGINAL_CLAUDE_LINES)
 

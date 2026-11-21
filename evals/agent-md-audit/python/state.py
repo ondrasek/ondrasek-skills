@@ -12,6 +12,9 @@ from pathlib import Path
 import fixtures
 
 MAX_TEXT_BYTES = 100_000
+# Claude Code's own write-tracking marker; nothing else under .claude/ is ignored, so an unapproved .claude/settings.json still counts.
+# Whether a headless run creates it in the workspace is unconfirmed until the first real run.
+IGNORED_PREFIX = ".claude/.cc-writes/"
 GIT = ["git", "-c", "user.name=eval", "-c", "user.email=eval@example.invalid", "-c", "commit.gpgsign=false",
        "-c", f"core.hooksPath={os.devnull}", "-c", "init.defaultBranch=main"]
 
@@ -58,7 +61,7 @@ def snapshot(root):
     files = {}
     for path in sorted(root.rglob("*")):
         rel = path.relative_to(root).as_posix()
-        if rel == ".git" or rel.startswith(".git/") or not path.is_file():
+        if rel == ".git" or rel.startswith(".git/") or not path.is_file() or rel.startswith(IGNORED_PREFIX):
             continue
         files[rel] = entry(path.read_bytes())
     try:
