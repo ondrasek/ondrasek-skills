@@ -43,6 +43,13 @@
       "description": "Block git force pushes (--force, -f, --force-with-lease) before the agent runs them, and tell it to ask the user first.",
       "version": "0.1.0",
       "category": "security"
+    },
+    {
+      "name": "agent-md-audit",
+      "source": "./plugins/agent-md-audit",
+      "description": "Audit local CLAUDE.md and AGENTS.md files against the current Anthropic guidelines (fetched live every run), propose fixes, and apply them only after you agree. May prune hard or overhaul a file.",
+      "version": "0.1.0",
+      "category": "productivity"
     }
   ]
 }
