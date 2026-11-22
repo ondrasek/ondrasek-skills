@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Evals for agent skills and plugins</title>
+<style>
+  :root {
+    --bg: #fbfaf7; --surface: #ffffff; --ink: #1d2230; --muted: #566074; --line: #dcd8cf;
+    --accent: #1f5fbf; --accent-soft: #e6eefb; --ok: #1d7a46; --ok-soft: #e3f4ea;
+    --warn: #96600a; --warn-soft: #fbf0d9; --bad: #a3322a; --bad-soft: #fbe7e5; --code-bg: #f1efe9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14171f; --surface: #1c2030; --ink: #e8eaf1; --muted: #a2abc0; --line: #2f354a;
+      --accent: #7fb0ff; --accent-soft: #1d2a47; --ok: #66d19a; --ok-soft: #153126;
+      --warn: #f0bf6a; --warn-soft: #3a2d12; --bad: #ff8f86; --bad-soft: #3d1b19; --code-bg: #232840;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 17px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 56rem; margin: 0 auto; padding: 0 16px 80px; }
+  header.top { padding: 40px 0 8px; }
+  header.top p.kicker { margin: 0 0 6px; color: var(--accent); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; font-size: .8rem; }
+  h1 { font-size: clamp(1.9rem, 5vw, 2.6rem); line-height: 1.15; margin: 0 0 12px; }
+  h2 { font-size: 1.55rem; margin: 2.6em 0 .5em; padding-top: .4em; border-top: 1px solid var(--line); line-height: 1.25; }
+  h3 { font-size: 1.15rem; margin: 1.8em 0 .3em; }
+  p { margin: .7em 0; }
+  a { color: var(--accent); }
+  code, pre { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: .88em; }
+  code { background: var(--code-bg); padding: .08em .35em; border-radius: 4px; }
+  pre { background: var(--code-bg); padding: 12px 14px; border-radius: 8px; overflow-x: auto; line-height: 1.5; }
+  pre code { background: none; padding: 0; }
+  .lede { font-size: 1.12rem; color: var(--muted); max-width: 46rem; }
+  .meta { color: var(--muted); font-size: .9rem; }
+  nav.toc { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 18px; margin: 22px 0; }
+  nav.toc strong { display: block; margin-bottom: 4px; }
+  nav.toc ol { margin: 0; padding-left: 1.2em; columns: 2; column-gap: 28px; }
+  nav.toc li { break-inside: avoid; }
+  .callout { border-left: 4px solid var(--accent); background: var(--accent-soft); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 1.2em 0; }
+  .callout.ok { border-color: var(--ok); background: var(--ok-soft); }
+  .callout.warn { border-color: var(--warn); background: var(--warn-soft); }
+  .callout.bad { border-color: var(--bad); background: var(--bad-soft); }
+  .callout p:first-child { margin-top: 0; } .callout p:last-child { margin-bottom: 0; }
+  .tablewrap { overflow-x: auto; margin: 1em 0; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: .93rem; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: var(--code-bg); font-weight: 600; white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .pill { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: .78rem; font-weight: 600; border: 1px solid transparent; white-space: nowrap; }
+  .pill.pass { background: var(--ok-soft); color: var(--ok); border-color: var(--ok); }
+  .pill.fail { background: var(--bad-soft); color: var(--bad); border-color: var(--bad); }
+  .pill.inc { background: var(--warn-soft); color: var(--warn); border-color: var(--warn); }
+  .pill.soft { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 14px; margin: 1em 0; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; }
+  .card h3 { margin: 0 0 .2em; font-size: 1.02rem; }
+  .card p { margin: .35em 0; font-size: .93rem; }
+  figure { margin: 1.4em 0; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  figure svg { width: 100%; height: auto; display: block; }
+  figcaption { color: var(--muted); font-size: .88rem; margin-top: 6px; }
+  details { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px; margin: .6em 0; }
+  details > summary { cursor: pointer; font-weight: 600; }
+  dl dt { font-weight: 600; margin-top: .8em; } dl dd { margin: .1em 0 0 0; color: var(--muted); }
+  ol.steps > li, ul.tight > li { margin: .35em 0; }
+  footer { margin-top: 3em; padding-top: 1em; border-top: 1px solid var(--line); color: var(--muted); font-size: .88rem; }
+  svg text { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; fill: var(--ink); }
+  svg .box { fill: var(--surface); stroke: var(--line); stroke-width: 1.5; }
+  svg .box.key { fill: var(--accent-soft); stroke: var(--accent); }
+  svg .arrow { stroke: var(--muted); stroke-width: 1.8; fill: none; }
+  svg .small { font-size: 12.5px; fill: var(--muted); }
+  @media (max-width: 640px) { nav.toc ol { columns: 1; } body { font-size: 16px; } }
+  @media print { body { background: #fff; color: #000; font-size: 11pt; } nav.toc, details { break-inside: avoid; } a { color: #000; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <p class="kicker">PA015 · course material</p>
+  <h1>Evals for agent skills and plugins</h1>
+  <p class="lede">How do you know that an AI agent still does what a skill promises after you edit it? You cannot reread your way to the answer. You run the agent on fixed prompts and grade what it <em>did</em>. This document explains how the six eval harnesses of this repository work, what they found when they ran against a live agent, and what you can learn from them.</p>
+  <p class="meta">Repository: <code>ondrasek-skills</code> (a Claude Code plugin marketplace) · state of the evals: 22 November 2026, Claude Code 2.1.330 · the numbers below are from real runs unless marked otherwise.</p>
+</header>
+
+<nav class="toc" aria-label="Contents">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#why">Why evals</a></li>
+    <li><a href="#vocab">Skills, plugins and hooks in two minutes</a></li>
+    <li><a href="#principles">Seven design ideas</a></li>
+    <li><a href="#trial">Anatomy of one trial</a></li>
+    <li><a href="#harnesses">The six harnesses</a></li>
+    <li><a href="#lessons">What the real runs taught us</a></li>
+    <li><a href="#run">How to run them</a></li>
+    <li><a href="#layout">Where things are</a></li>
+    <li><a href="#exercises">Exercises</a></li>
+    <li><a href="#limits">What is not measured</a></li>
+    <li><a href="#glossary">Glossary and sources</a></li>
+  </ol>
+</nav>
+
+<div class="callout">
+  <p><strong>The one-paragraph version.</strong> Each harness builds a throwaway workspace, runs the real agent headless on a fixed prompt, and then grades <strong>the state the agent left behind</strong> (files, git history, a bare remote, a tracker, a report) with small pure functions. The agent's own account of what it did is only secondary evidence. A trial ends <span class="pill pass">PASS</span>, <span class="pill fail">FAIL</span> or <span class="pill inc">INCONCLUSIVE</span> (the behaviour under test never happened), and checks that only read the model's prose can warn but never decide. Every check has an invented failing run that a test enforces, so the machinery is tested offline for free before it ever spends a cent.</p>
+</div>
+
+<h2 id="why">1. Why evals, and why not just unit tests</h2>
+<p>A skill is a text file of instructions that a language model reads. Changing one sentence can change behaviour in ways a diff does not show. Classic unit tests assume a deterministic function; here the "function" is a model that answers differently each time and that chooses its own tool calls. An <strong>eval</strong> is a repeatable experiment: fixed prompts, a controlled workspace, recorded behaviour, and explicit success criteria.</p>
+<p>This repository already has ordinary unit tests under <code>tests/</code>. They feed invented input to the scripts of the plugins (the hook shell scripts, <code>milestones.py</code>). They cannot tell you whether a hook fires in a real session, whether the agent obeys what the hook says, or whether a skill triggers on the right sentence and stays quiet on the wrong one. The evals in <code>evals/</code> answer exactly those questions, and they deliberately do not repeat what <code>tests/</code> already checks.</p>
+<p>Why not the built-in <code>claude plugin eval</code>? It is a good fit for "does the skill trigger and what does the reply say". These harnesses need three things its documentation did not offer when this was checked (see <a href="#glossary">sources</a>): assertions about file and git state (hashes, line counts, "nothing was committed"), a scripted second turn (the approval message after a proposal), and grading recorded runs offline so that the graders themselves can be unit-tested without model calls.</p>
+
+<h2 id="vocab">2. Skills, plugins and hooks in two minutes</h2>
+<dl>
+  <dt>Skill</dt><dd>A <code>SKILL.md</code> file with a short <code>description</code>. The agent loads the skill when the description matches what the user asked. The description drives <em>triggering</em>; the body is the behaviour.</dd>
+  <dt>Plugin</dt><dd>A package that can hold skills, hooks and scripts. This repository is a <em>marketplace</em> of six plugins: <code>oaat</code>, <code>sitrep</code>, <code>milestones</code>, <code>agent-md-audit</code>, <code>auto-commit</code>, <code>block-force-push</code>.</dd>
+  <dt>Hook</dt><dd>A script that Claude Code runs at an event, not the model. A <code>Stop</code> hook runs when the agent wants to finish; if it exits with code 2, its message goes back to the agent and the agent continues. A <code>PreToolUse</code> hook runs before a tool call; exit code 2 blocks the call and the agent sees the reason. Three of the plugins are hooks (<code>auto-commit</code>, <code>block-force-push</code>, and the reminder of <code>milestones</code>).</dd>
+  <dt>Headless run</dt><dd><code>claude -p "prompt"</code> runs the agent without a terminal UI. With <code>--output-format stream-json --verbose</code> it prints one JSON event per line (the <strong>trace</strong>). The harnesses parse that trace.</dd>
+</dl>
+
+<h2 id="principles">3. Seven design ideas (and the reason for each)</h2>
+<ol class="steps">
+  <li><strong>The workspace is the ground truth, the transcript is secondary.</strong> A transcript can only <em>claim</em> "I changed nothing". The harness snapshots the files (sha-256, line count, text), the git HEAD, and for the git plugins the bare remote, before and after each turn, and compares. The trace also misses work done by sub-agents; the files do not.</li>
+  <li><strong>Checks are pure functions.</strong> A check receives the recorded trace and the snapshots and returns <code>(id, passed, note)</code>. No network, no model, no clock. That is what makes them testable.</li>
+  <li><strong>Every check has an invented failing run.</strong> A registry called <code>MUTATIONS</code> maps each check id to a doctored good run that must make exactly that check fail, and a test fails if a check has no entry. A check that has never been seen to fail proves nothing.</li>
+  <li><strong>Three verdicts, not two.</strong> If a <em>precondition</em> fails (the plugin did not load, the hook errored before it ran, the command was denied, the run crashed), the trial is <span class="pill inc">INCONCLUSIVE</span>, not a failure of the plugin. The rule is narrow: a precondition may explain a <em>missing</em> effect, never a <em>wrong write</em>. A denied call that left everything unchanged is inconclusive; a rewritten remote after the hook did run is still a FAIL.</li>
+  <li><strong>Deciding checks versus advisory ones.</strong> A check decided by state or by structured trace facts (tool name, command arguments, exit status) decides the verdict. A check that only matches words in text the model wrote is placed in a <em>soft</em> group: it is computed and reported as <span class="pill soft">WARN</span> but never changes the verdict. Regexes over prose cannot be made both unevadable and free of false alarms; three review rounds proved it.</li>
+  <li><strong>An offline stub agent.</strong> A small program prints invented traces and edits real files in real temporary git repositories, so the whole runner (build workspace, snapshots, grading, report) runs in the unit tests with no model. Recorded real runs can also be re-graded offline (<code>--fixtures</code>).</li>
+  <li><strong>Fixtures are built in code, never committed as files.</strong> A <code>CLAUDE.md</code> or <code>.claude/</code> directory committed under <code>evals/</code> would load for anyone working in the repository and would be audited by the skill under test. A test enforces that none exists.</li>
+</ol>
+
+<h2 id="trial">4. Anatomy of one trial</h2>
+<figure>
+<svg viewBox="0 0 860 250" role="img" aria-label="Flow of one trial: build workspace, snapshot, run agent turn 1, snapshot, optional turn 2, snapshot, grade">
+  <defs><marker id="ah" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 Z" fill="#8a93a6"/></marker></defs>
+  <rect class="box" x="10" y="20" width="130" height="64" rx="8"/><text x="75" y="48" text-anchor="middle" font-size="14" font-weight="600">1 Build</text><text class="small" x="75" y="68" text-anchor="middle">temp repo from code</text>
+  <rect class="box key" x="165" y="20" width="130" height="64" rx="8"/><text x="230" y="48" text-anchor="middle" font-size="14" font-weight="600">2 Snapshot</text><text class="small" x="230" y="68" text-anchor="middle">files, HEAD, remote</text>
+  <rect class="box" x="320" y="20" width="130" height="64" rx="8"/><text x="385" y="48" text-anchor="middle" font-size="14" font-weight="600">3 Agent turn 1</text><text class="small" x="385" y="68" text-anchor="middle">claude -p, headless</text>
+  <rect class="box key" x="475" y="20" width="130" height="64" rx="8"/><text x="540" y="48" text-anchor="middle" font-size="14" font-weight="600">4 Snapshot</text><text class="small" x="540" y="68" text-anchor="middle">nothing may have moved</text>
+  <rect class="box" x="630" y="20" width="130" height="64" rx="8"/><text x="695" y="48" text-anchor="middle" font-size="14" font-weight="600">5 Turn 2 (some)</text><text class="small" x="695" y="68" text-anchor="middle">--resume, approval</text>
+  <rect class="box key" x="780" y="20" width="70" height="64" rx="8"/><text x="815" y="48" text-anchor="middle" font-size="14" font-weight="600">6</text><text class="small" x="815" y="68" text-anchor="middle">Snapshot</text>
+  <path class="arrow" d="M140,52 L163,52" marker-end="url(#ah)"/><path class="arrow" d="M295,52 L318,52" marker-end="url(#ah)"/><path class="arrow" d="M450,52 L473,52" marker-end="url(#ah)"/><path class="arrow" d="M605,52 L628,52" marker-end="url(#ah)"/><path class="arrow" d="M760,52 L778,52" marker-end="url(#ah)"/>
+  <path class="arrow" d="M230,84 L230,150 L420,150" marker-end="url(#ah)"/><path class="arrow" d="M540,84 L540,130 L440,130" marker-end="url(#ah)"/><path class="arrow" d="M815,84 L815,150 L640,150" marker-end="url(#ah)"/>
+  <rect class="box key" x="420" y="112" width="220" height="76" rx="8"/><text x="530" y="140" text-anchor="middle" font-size="14" font-weight="600">7 Grade</text><text class="small" x="530" y="160" text-anchor="middle">pure checks on trace + snapshots</text><text class="small" x="530" y="178" text-anchor="middle">PASS · FAIL · INCONCLUSIVE · WARN</text>
+  <text class="small" x="10" y="226">The trace of every turn is saved as JSONL next to the snapshots, so a run can be re-graded offline later.</text>
+</svg>
+<figcaption>One trial. The stream-json trace is the secondary evidence; the three snapshots are the ground truth.</figcaption>
+</figure>
+<p>Details that matter:</p>
+<ul class="tight">
+  <li><strong>Isolation.</strong> The agent runs with <code>--setting-sources project,local</code> so your own user settings, hooks and plugins stay out, and with <code>--plugin-dir</code> pointing at the plugin under test. Variables such as <code>CLAUDE_PROJECT_DIR</code> are unset for the child, so a hook cannot look at the repository the harness was started from.</li>
+  <li><strong>Approval by content.</strong> The second turn of a two-turn case states decisions by what they say ("drop the typecheck rule, leave AGENTS.md exactly as it is"), because the model numbers its proposals differently each run.</li>
+  <li><strong>Which checks run</strong> depends on the case's <code>expect</code> column (for example <code>proposal</code>, <code>apply</code>, <code>none</code> for negative controls).</li>
+  <li><strong>Cost.</strong> The result event of a resumed turn already reports the whole session's cost, so the shared reader takes the last result event rather than summing (see <a href="#lessons">lessons</a>).</li>
+</ul>
+
+<h2 id="harnesses">5. The six harnesses</h2>
+<p>All six live under <code>evals/&lt;plugin&gt;/</code> and share one module, <code>evals/_common/</code> (the stream-json reader and the command runner). The table shows what each grades and what the live runs gave. "Trials" is how many times each case was run for real.</p>
+
+<div class="tablewrap"><table>
+  <thead><tr><th>Plugin</th><th class="num">Cases</th><th class="num">Checks</th><th class="num">Offline tests</th><th>Real runs</th></tr></thead>
+  <tbody>
+    <tr><td><code>oaat</code></td><td class="num">11</td><td class="num">12 per prompt</td><td class="num">132</td><td><span class="pill pass">11 / 11</span> 1 trial each</td></tr>
+    <tr><td><code>agent-md-audit</code></td><td class="num">8</td><td class="num">27</td><td class="num">52</td><td><span class="pill pass">8 / 8</span> 1 trial each</td></tr>
+    <tr><td><code>auto-commit</code></td><td class="num">6</td><td class="num">18</td><td class="num">150</td><td><span class="pill pass">18 / 18</span> 3 trials each</td></tr>
+    <tr><td><code>block-force-push</code></td><td class="num">3</td><td class="num">11</td><td class="num">119</td><td><span class="pill pass">9 / 9</span> 3 trials each</td></tr>
+    <tr><td><code>milestones</code></td><td class="num">10</td><td class="num">23</td><td class="num">239</td><td><span class="pill pass">30 / 30</span> 3 trials each</td></tr>
+    <tr><td><code>sitrep</code></td><td class="num">8</td><td class="num">26</td><td class="num">264</td><td><span class="pill pass">21 / 21</span> 3 trials each on seven cases, plus <span class="pill pass">5 / 5</span> regraded on the new one (see note)</td></tr>
+  </tbody>
+</table></div>
+<p class="meta">Note on <code>sitrep</code>: the seven older cases passed 21 of 21; <code>discover-open-items</code> was run 5 times, 4 trials graded PASS and one was a valid run that the check wrongly graded INCONCLUSIVE, which regrades as a pass after the fix. <code>_common</code> has 33 tests of its own. The number of checks is the size of the harness's <code>GROUPS</code> registry; <code>oaat</code> has 12 checks per prompt (132 over its 11 prompts).</p>
+
+<div class="cards">
+  <div class="card">
+    <h3><code>oaat</code> — the teaching sample</h3>
+    <p>A skill that presents exactly one pending item in a fixed shape and waits. Developed as the PA015 sample (<code>05-oaat-skill-evals</code>) and ported here.</p>
+    <p><strong>Groups:</strong> outcome, process, style, efficiency. Prompts are explicit, implicit, contextual, follow-up (skip, stop, tangent) and negative controls. An optional second model call grades a JSON rubric for what code cannot judge.</p>
+  </div>
+  <div class="card">
+    <h3><code>agent-md-audit</code></h3>
+    <p>A skill that audits <code>CLAUDE.md</code> and <code>AGENTS.md</code> against current documentation, proposes fixes, and applies them <em>only after approval</em>.</p>
+    <p><strong>Graded:</strong> researched online before reading, proposed with a numbered table, <strong>changed no file before approval</strong>; after approval, the dead import and emphasis spam are gone, the contradiction is resolved, <code>AGENTS.md</code> is byte-identical, nothing is committed. The planted fixture has 229 lines and five defects.</p>
+  </div>
+  <div class="card">
+    <h3><code>auto-commit</code> (Stop hook)</h3>
+    <p>When the agent stops with an unsaved repository, the hook reports the state and the agent should save it.</p>
+    <p><strong>Graded from git state:</strong> WIP committed and pushed to a local bare remote, remote changes merged (never rebased) with all earlier commits kept, <code>.env</code> in no commit, no remote invented, nothing done when the tree is clean. The prompts never mention git, so the outcome can only come from the hook.</p>
+  </div>
+  <div class="card">
+    <h3><code>block-force-push</code> (PreToolUse hook)</h3>
+    <p>The hook blocks a history rewrite. A small harness: three cases.</p>
+    <p><strong>Graded:</strong> the rewrite is blocked, the remote ref is unchanged, the agent does not try another spelling, and an ordinary push still goes through (the control case). A hook that errors before running makes the trial INCONCLUSIVE.</p>
+  </div>
+  <div class="card">
+    <h3><code>milestones</code> (skill + Stop reminder)</h3>
+    <p>A project tracker in <code>.cache/milestones.json</code> written through a script.</p>
+    <p><strong>Graded:</strong> the skill triggers on the right prompts and not on others; the tracker ends valid against its schema, in the requested state, other items untouched; it is written only through the script and never committed; the Stop reminder leads to an update only when a milestone really finished.</p>
+  </div>
+  <div class="card">
+    <h3><code>sitrep</code> (skill)</h3>
+    <p>Builds a temporary HTML situation report in a temp directory outside the project.</p>
+    <p><strong>Graded:</strong> the skill triggers; <code>data.js</code> defines <code>window.SITREP</code> and validates against the schema offline in pure Python; the planted open items and their dependency are in the data; nothing is written into the project; the report directory is deleted afterwards.</p>
+  </div>
+</div>
+
+<h3>The checks, by group</h3>
+<div class="tablewrap"><table>
+  <thead><tr><th>Group</th><th>Question it answers</th><th>Evidence</th></tr></thead>
+  <tbody>
+    <tr><td><strong>precondition</strong></td><td>Was the behaviour under test actually exercised?</td><td>plugin loaded, run completed, hook ran without error, report reached the agent, no unexplained denial. A failure makes the trial INCONCLUSIVE.</td></tr>
+    <tr><td><strong>process</strong></td><td>Did the agent take the expected route?</td><td>trace: the Skill tool call, order of tool calls (research before reading), command arguments</td></tr>
+    <tr><td><strong>gate</strong></td><td>Did the agent stay within bounds?</td><td>snapshots: no file added, removed or changed, HEAD unmoved, tracker written only by the script</td></tr>
+    <tr><td><strong>outcome</strong></td><td>Is the end state right?</td><td>snapshots and parsed structures (git history, the tracker, the parsed <code>data.js</code>)</td></tr>
+    <tr><td><strong>apply</strong></td><td>After approval, was the change right and nothing else touched?</td><td>snapshots after turn 2</td></tr>
+    <tr><td><strong>soft</strong> <span class="pill soft">WARN</span></td><td>Does the wording look right?</td><td>regexes over the model's prose; advisory only</td></tr>
+  </tbody>
+</table></div>
+
+<h2 id="lessons">6. What the real runs taught us</h2>
+<p>The interesting part of an eval project is what you only learn by running it. Everything here was measured on 22 November 2026 and is recorded in the READMEs of the harnesses.</p>
+
+<div class="callout warn">
+  <p><strong>Lesson 1: the environment can fail instead of the plugin.</strong> The first attempt ran inside the Claude Code Bash sandbox. Claude Code could not create its plugin data directory, so every hook errored with <code>EPERM</code>, and a session could not be resumed. The harness had graded one such trial as a FAIL of the plugin. That is wrong, and it is why the INCONCLUSIVE verdict and the hook-error precondition exist. Real runs must be started outside that sandbox.</p>
+</div>
+
+<div class="callout warn">
+  <p><strong>Lesson 2: permission modes have surprising edges.</strong> Probing the real CLI with tiny calls showed that <code>dontAsk</code> denies any output redirect (<code>printf x &gt;&gt; f</code>), heredoc writes, shell-variable calls (<code>S=…; python3 "$S" …</code>) and reads of absolute paths outside the working directories, even when the command is on the allow-list. <code>acceptEdits</code> allows redirects; <code>--add-dir</code> allows the extra read. Plain pipes, <code>;</code> chains, <code>2&gt;/dev/null</code> and multi-line commit messages were fine. Guessing grants twice failed; a handful of small probes settled it.</p>
+</div>
+
+<div class="callout ok">
+  <p><strong>Lesson 3: an eval found a real flaw in a skill, and the fix could be measured.</strong> The <code>milestones</code> skill's script call was often rewritten by the model into a shell-variable form that no permission pattern can match.</p>
+  <ul class="tight">
+    <li>Before any change: <code>update-finish-and-start</code> 0 of 3 and <code>create-tracker</code> 0 of 3 trials passed (all inconclusive or failed on the denial).</li>
+    <li>After asking in <code>SKILL.md</code> to write the script path out in every command: update 3 of 3; <code>create-tracker</code> still 1 of 3.</li>
+    <li>After adding a worked example of a chained create: <code>create-tracker</code> 3 of 3, then 3 of 3 again in the repeat pass.</li>
+  </ul>
+  <p>The plugin was bumped twice (0.3.1, 0.3.2) because the behaviour visible to users changed.</p>
+</div>
+
+<div class="callout ok">
+  <p><strong>Lesson 4: a vague prompt exposed a gap in a skill.</strong> With a milestone tracker present and the prompt "what is the state of things in this project?", the <code>sitrep</code> agent built its report from the tracker alone and never opened <code>docs/open-questions.md</code>, in 4 of 5 trials. Naming the file in the prompt made the case pass 5 of 5 but hid the gap, so the case was kept for what it tests (milestone integration) and a new case with the vague prompt was added. After <code>SKILL.md</code> step 1 was changed to tell the agent to look in the working tree, that case passed in every valid trial.</p>
+</div>
+
+<div class="callout">
+  <p><strong>Lesson 5: a text check cannot be both strict and fair.</strong> Reviewers kept finding replies a regex graded wrongly in both directions (a correct reply failing, a lying reply passing) and each fix traded one error for the other. The structural answer was the <em>soft</em> group: prose checks warn, state decides.</p>
+</div>
+
+<div class="callout">
+  <p><strong>Lesson 6: measure the instrument too.</strong> Two older harnesses summed the cost over every result event. In a real two-turn trace the first result reported $0.0906 and the second, of the same session, $0.1201, so the cumulative figure is the last one ($0.1201, not $0.2107). One fix in the shared module corrected both, and some figures quoted in the <code>oaat</code> README dropped (for example $0.76 to $0.64). The same project moved six copies of two files into one shared module, with a test that fails if a copy comes back.</p>
+</div>
+
+<p>The harnesses themselves were built by a pipeline of models in assigned roles (research, plan, build, adversarial review, fix), and an independent reviewer read the code on disk after each build. Across the four newer harnesses that review found real bugs over several rounds: checks that failed correct runs, checks that passed lying ones, and verdict logic that could turn a real failure into INCONCLUSIVE. It is a useful reminder that evals are software and need review and tests like any other.</p>
+
+<h2 id="run">7. How to run them</h2>
+<div class="callout bad">
+  <p><strong>Cost and safety first.</strong> A real run makes model calls on <em>your</em> account (about $0.04 to $0.25 per trial in these runs; <code>agent-md-audit</code> also makes web fetches). It needs Claude Code installed and logged in. For the git plugins the agent runs with a broad <code>git</code> grant in a temporary directory against a local bare remote; if your Bash is not sandboxed it runs with your user rights, so use a VM or container if that worries you. Recorded traces can contain the contents of your <code>~/.claude/CLAUDE.md</code>: do not share <code>artifacts/</code> without looking.</p>
+</div>
+
+<h3>Free and offline (start here)</h3>
+<pre><code># everything: shared module, then all six harnesses (a few minutes: three of them run real git)
+make -C evals/_common test-all
+
+# one harness
+make -C evals/milestones test
+
+# re-grade recorded runs without any model call (needs an artifacts/ directory from a real run of your own)
+python3 evals/sitrep/python/run_evals.py --fixtures evals/sitrep/artifacts</code></pre>
+<p>Offline tests need Python 3 and <code>make</code>, nothing else (standard library only). They are the right place to learn the machinery: read a check in <code>python/checks.py</code>, then its entry in <code>tests/test_checks.py</code>.</p>
+
+<h3>Real runs (costs money)</h3>
+<pre><code># one case, one trial: always start here
+make -C evals/block-force-push eval ARGS="--only plain-push-control --trials 1"
+
+# several trials of several cases (comma separated, not a repeated flag)
+make -C evals/milestones eval ARGS="--only create-tracker,update-finish-and-start --trials 3"</code></pre>
+<p>Run real trials from a normal terminal, <strong>outside the Claude Code Bash sandbox</strong>. A trial that cannot run properly ends INCONCLUSIVE with the reason in the failures list. Each README names a canary case to run first.</p>
+
+<h2 id="layout">8. Where things are</h2>
+<pre><code>evals/
+  _common/python/agent_trace.py   the stream-json reader (the cost rule lives here)
+  _common/python/runner_cmd.py    runs the agent command with a timeout
+  _common/tests/                  tests of the two modules + a layout check
+  &lt;plugin&gt;/
+    README.md                     method, cases, checks, real-run record, what is unconfirmed
+    cases/cases.csv               prompts, fixture, expectation (oaat: evals/prompts.csv)
+    python/fixtures.py            the workspaces, built in code
+    python/state.py               snapshots (files, git HEAD, remote)
+    python/checks.py              GROUPS + the pure check functions
+    python/run_evals.py           the runner (builds, runs, snapshots, grades, reports)
+    tests/stub_agent.py           the offline stand-in for the agent
+    tests/test_checks.py          MUTATIONS: one failing run per check
+    artifacts/                    recorded traces and snapshots (git-ignored)</code></pre>
+
+<h2 id="exercises">9. Exercises</h2>
+<p>Start with the offline tests; none of these needs a model.</p>
+<details><summary>1. Break a check on purpose</summary>
+  <p>Pick one check in <code>evals/milestones/python/checks.py</code> and make it always return <code>True</code>. Which test fails, and why does that test exist? Revert.</p></details>
+<details><summary>2. Add a mutation</summary>
+  <p>Find a check whose entry in <code>MUTATIONS</code> only covers one way to fail. Write a second invented bad run that it should also catch. Does it? If not, you found a false negative.</p></details>
+<details><summary>3. Design a negative control</summary>
+  <p>For <code>sitrep</code>, write a prompt that is close to "show me the situation" but must <em>not</em> trigger the skill. Why is a near miss a better test than an obviously unrelated prompt?</p></details>
+<details><summary>4. Explain INCONCLUSIVE</summary>
+  <p>Read the <code>EXPLAINED_BY</code> table in a harness. Give one example where a failed precondition should turn a failure into INCONCLUSIVE and one where it must not. State the rule in one sentence ("a precondition may explain a missing effect, never a wrong write") and test it on your examples.</p></details>
+<details><summary>5. Fair or unfair?</summary>
+  <p>Take the advisory <code>reply-hands-over</code> check of <code>sitrep</code>. Write a reply it would wrongly warn about and one it would wrongly accept. Why was it made advisory instead of being tuned?</p></details>
+<details><summary>6. Plan an experiment</summary>
+  <p>You change one sentence of a skill. How many trials per case do you need before you trust a before/after difference? What would you record to make the comparison fair? (Hint: in this project one case went from no passing trial to 3 of 3 after a short change to a skill.)</p></details>
+<details><summary>7. Review a harness</summary>
+  <p>Pick one README and list every statement of the form "unconfirmed". For each, say what real run or probe would settle it, and what it would cost.</p></details>
+
+<h2 id="limits">10. What is not measured</h2>
+<ul class="tight">
+  <li><strong>Sample sizes are small.</strong> One to five trials per case. Three clean trials do not prove a model never misses; they rule out frequent misses.</li>
+  <li><strong>One model and one version of the tool.</strong> Everything was run on Claude Code 2.1.330. Hook and permission behaviour is documented in the READMEs as "confirmed" only for that version.</li>
+  <li><strong>Heuristics remain.</strong> The command-line checks read parsed arguments, but a rare spelling (for example a push hidden inside a heredoc) can slip past them; the state checks still catch the result if it lands.</li>
+  <li><strong>The checks judge structure, not quality.</strong> They can say a proposal named the planted defect, not whether the proposed fix is a good one.</li>
+  <li><strong>The sandbox caveat.</strong> Real runs happen outside the Claude Code Bash sandbox; the graders and the unit tests do not need that.</li>
+</ul>
+
+<h2 id="glossary">11. Glossary and sources</h2>
+<dl>
+  <dt>Trace</dt><dd>The JSON-lines event stream of a headless run: init event, assistant and tool events, hook events, result event.</dd>
+  <dt>Snapshot</dt><dd>Every file with its hash, line count and text, plus git HEAD and, where relevant, the remote's refs. Taken before, after turn 1 and after turn 2.</dd>
+  <dt>Fixture</dt><dd>The prepared workspace a case starts from, generated by code in a temporary directory.</dd>
+  <dt>Negative control</dt><dd>A prompt on which the skill must <em>not</em> trigger or must change nothing.</dd>
+  <dt>Canary</dt><dd>The cheapest case that shows within one run whether the unverified assumptions hold.</dd>
+  <dt>Mutation (here)</dt><dd>An invented bad run, built by changing a good one, that a specific check must catch.</dd>
+  <dt>Precondition / soft check</dt><dd>See sections 3 and 5.</dd>
+  <dt>Flakiness</dt><dd>The same case giving different verdicts on identical input, measured by repeated trials.</dd>
+</dl>
+
+<h3>Sources</h3>
+<ul class="tight">
+  <li>OpenAI, "Testing Agent Skills Systematically with Evals", <a href="https://developers.openai.com/blog/eval-skills">developers.openai.com/blog/eval-skills</a> (the page shows no date or author; read 4 November 2026; link checked 22 November 2026). Source of the four success groups, the prompt CSV with <code>should_trigger</code>, one JSONL trace per prompt and deterministic checks over the trace.</li>
+  <li>Mullen and Gunderman, "The Anatomy of Harness Engineering", Google for Developers Blog, 9 September 2026 (read 4 November 2026). Source of the behavioural eval idea: assert on a tool call and observable behaviour, not on prose. The link was not re-verified for this document.</li>
+  <li>Claude Code documentation, read and checked while building the harnesses: <a href="https://code.claude.com/docs/en/hooks">hooks</a>, <a href="https://code.claude.com/docs/en/headless">headless mode</a>, <a href="https://code.claude.com/docs/en/plugin-evals">plugin evals</a> (the built-in runner discussed in section 1).</li>
+  <li>The PA015 sample <code>05-oaat-skill-evals</code> (Ondrej Krajicek, course PA015, Masaryk University) is the origin of <code>evals/oaat</code>.</li>
+  <li>The per-harness READMEs under <code>evals/</code> hold the full record, including every real-run result, the cost of each run and the list of things still unconfirmed.</li>
+</ul>
+
+<footer>
+  <p>Written from the state of the repository on 22 November 2026. Numbers of tests, checks and trials are copied from the harness READMEs and registries at that date; if the code has moved on, the READMEs are authoritative.</p>
+</footer>
+
+</div>
+</body>
+</html>
