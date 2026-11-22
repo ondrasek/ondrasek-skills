@@ -234,17 +234,17 @@ class Runner(unittest.TestCase):
 
 
 class DefaultCommand(unittest.TestCase):
-    EXTRA = ["--add-dir", "/t/tmp", "--plugin-dir", "/p"]
+    EXTRA = ["--add-dir", "/t/tmp", "/p", "--plugin-dir", "/p"]
 
     def argv(self, extra):
         return runner_cmd.build(run_evals.DEFAULT_AGENT_CMD, "THE PROMPT", extra)
 
     def test_it_is_isolated_and_reports_hooks_and_plugins(self):
         argv = self.argv(self.EXTRA)
-        for needle in ("--verbose", "--include-hook-events", "stream-json", "dontAsk"):
+        for needle in ("--verbose", "--include-hook-events", "stream-json", "acceptEdits"):
             self.assertIn(needle, argv)
         self.assertEqual(argv[argv.index("--setting-sources") + 1], "project,local")
-        self.assertEqual(argv[argv.index("--permission-mode") + 1], "dontAsk")
+        self.assertEqual(argv[argv.index("--permission-mode") + 1], "acceptEdits")
         self.assertNotIn("--bare", argv)
         self.assertEqual((argv[0], argv[argv.index("claude") - 1]), ("env", "MILESTONES_STALE_MINUTES"))
         for variable in ("CLAUDE_PROJECT_DIR", "CLAUDE_HOOK_RUNNING", "MILESTONES_FILE", "MILESTONES_NOW"):
@@ -255,8 +255,14 @@ class DefaultCommand(unittest.TestCase):
             argv = self.argv(extra)
             self.assertLess(argv.index("THE PROMPT"), argv.index("--allowedTools"))
             self.assertTrue(argv[argv.index("--allowedTools") + 2].startswith("--"))
-            after_dir = argv[argv.index("--add-dir") + 2:argv.index("--add-dir") + 3]
-            self.assertTrue(after_dir and after_dir[0].startswith("--"), "--add-dir takes a list: a flag must follow its value")
+            tail = argv[argv.index("--add-dir") + 1:]
+            values = []
+            for token in tail:
+                if token.startswith("--"):
+                    break
+                values.append(token)
+            self.assertEqual(values, ["/t/tmp", "/p"])
+            self.assertTrue(len(tail) > len(values), "--add-dir takes a list: a flag must follow its values")
 
     def test_the_grants_are_one_argument_and_the_tools_match_the_plan(self):
         argv = self.argv(self.EXTRA)

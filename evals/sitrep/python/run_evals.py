@@ -52,8 +52,10 @@ ALLOWED = ("Skill,Read,Glob,Grep,Write,Edit,Bash(*report.sh *),Bash(*report.sh\"
 # runner_cmd.run can add to the environment but not remove from it. `project,local` is meant to keep the machine's user settings, hooks and
 # plugins out (the intent; whether it does is unconfirmed, see the README). Not --bare: `claude --help` says it skips hooks, plugin sync
 # and more, and what that does to --plugin-dir has not been checked.
+# MODE acceptEdits, not dontAsk: a probe of the real CLI (2026-11-22, Claude Code 2.1.330) showed that dontAsk denies a heredoc write such as
+# `cat > .../data.js <<EOF` (the agent wrote the report that way in a real trial) while acceptEdits allows it; ungranted commands are still denied.
 DEFAULT_AGENT_CMD = ("env -u CLAUDE_PROJECT_DIR -u CLAUDE_HOOK_RUNNING -u MILESTONES_FILE -u MILESTONES_NOW -u MILESTONES_STALE_MINUTES "
-                     "claude -p {prompt} --output-format stream-json --verbose --include-hook-events --permission-mode dontAsk "
+                     "claude -p {prompt} --output-format stream-json --verbose --include-hook-events --permission-mode acceptEdits "
                      f"--max-budget-usd 2 --allowedTools {shlex.quote(ALLOWED)} --setting-sources project,local")
 
 
@@ -94,7 +96,9 @@ def run_trial(row, trial, args, layout):
     """The two turns of a trial in `layout`; returns (trace text, states dict, error note)."""
     template = Path(args.plugin) / "skills" / "sitrep" / "template.html"
     states = {"layout": layout, "plugin": str(Path(args.plugin).resolve()), "before": state.snapshot(layout["ws"]), "after2": None, "report2": None}
-    extra = ["--add-dir", layout["tmp"], "--plugin-dir", str(Path(args.plugin).resolve())]
+    # --add-dir: the trial TMPDIR (the report is made there) and the plugin directory (the skill tells the agent to read its own schema.md
+    # by absolute path, and a Bash read outside the working directories is denied without it: seen in 3 of 5 real with-milestones trials)
+    extra = ["--add-dir", layout["tmp"], str(Path(args.plugin).resolve()), "--plugin-dir", str(Path(args.plugin).resolve())]
     out, note = run_turn(row.prompt, row, trial, 1, args, layout, extra)
     directory, how = state.find_report(trace.parse(out)[0], layout["tmp"])
     states.update(after1=state.snapshot(layout["ws"]), tmp_sitrep=state.sitrep_dirs(layout["tmp"]),
