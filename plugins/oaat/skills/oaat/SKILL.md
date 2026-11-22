@@ -21,7 +21,7 @@ Put items that block other items or work first, then by impact if left unaddress
 
 ## 3. Present one item
 
-**If the `AskUserQuestion` tool is available to you (in your tool list, or listed as a deferred tool you can load), use it.** If it is not listed, do not go searching for it. Make one call with one question per item, and make the next call only after the answer to this one has come back: never batch several items. If the tool is not in your list, or the call is denied or fails (headless runs, subagents), use the text template below, without mentioning why.
+**If the `AskUserQuestion` tool is in your tool list, use it.** If it is not listed, do not search for it: use the text template below, without mentioning why (headless runs and subagents have no such tool). Make one call with one question per item, and make the next call only after the answer to this one has come back: never batch several items. If a call fails because of its input (for example a header that is too long), fix the input and call again. If the tool is denied or unavailable, present that item with the text template instead.
 
 The tool call, for one item:
 
@@ -30,7 +30,7 @@ The tool call, for one item:
 - `options`: the item's one to three choices. Each has a short `label` (a few words) and a `description` with its trade-off in one line. Put the recommended option first and end its label with `(Recommended)`; the reason for it goes in its description. Add a last option labelled `Skip for now`, described as `Park this item and move on.` That makes two to four options in total.
 - `multiSelect`: `false`.
 
-Then **stop and wait** for the answer, which comes back to you as the result of the call. Write no other text around a call, with two exceptions: the one-line count before the first item, and one plain line (a confirmation, an explanation or a correction, see below) before the next call. Never list the other items, not even in that line.
+Then **stop and wait** for the answer, which comes back to you as the result of the call. An item presented with the text template ends the turn: make no further call after it in the same turn. Write no other text around a call, with two exceptions: the one-line count before the first item, and one plain line (a confirmation, an explanation or a correction, see below) before the next call. Never list the other items, not even in that line.
 
 ### Text template (no tool)
 
@@ -70,7 +70,7 @@ Then **stop and wait**. Say nothing about other items, do not preview what is ne
   This may be a tangent from X. Continue or refocus?
   ```
 
-  Add nothing else: no item header, no repeat of the item, no second question. This line is the one question of the reply. If the user says "refocus", present the current item again (with the tool, or in the template); if "continue", follow the tangent first and return to the item afterwards.
+  Add nothing else: no item header, no repeat of the item, no second question, no tool call after it. This line is the one question of the reply and it ends the turn. If the user says "refocus", present the current item again (with the tool, or in the template); if "continue", follow the tangent first and return to the item afterwards.
 - New items found while discussing: add them to the queue silently; do not interrupt.
 
 ## 5. Wrap up
