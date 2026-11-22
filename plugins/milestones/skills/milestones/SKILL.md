@@ -30,7 +30,10 @@ tracker shows no statusline segment).
 
 ## Keep it current (the agent's job)
 
-Update the file at each milestone, in the same turn the work changes — never in a batch later:
+Update the file at each milestone, in the same turn the work changes — never in a batch later.
+Write the script's full path out in every command, as below. Do not put it in a shell variable
+(`S=…; python3 "$S" set …`): a permission rule such as the `allowed-tools` pattern cannot match a
+variable, so the call is denied or prompts.
 
 ```sh
 python3 "${CLAUDE_SKILL_DIR}/scripts/milestones.py" set 2 --state doing            # records started
