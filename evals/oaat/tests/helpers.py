@@ -12,6 +12,7 @@ TESTS = UNIT / "tests"
 TRACES = TESTS / "fixtures" / "traces"
 PROMPTS = UNIT / "evals" / "prompts.csv"
 sys.path.insert(0, str(PYTHON))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_common" / "python"))  # after python/: the shared modules win
 
 import cases  # noqa: E402
 import checks  # noqa: E402

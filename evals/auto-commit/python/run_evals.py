@@ -68,7 +68,7 @@ GROUPS = ("precondition", "process", "gate", "outcome")      # the soft group is
 def without_git_variables():
     """Remove every GIT_* variable from os.environ for the duration.
 
-    runner_cmd.run (a byte-identical copy that must stay so) merges os.environ into the child's environment and cannot unset anything,
+    runner_cmd.run (shared, evals/_common/python) merges os.environ into the child's environment and cannot unset anything,
     and the caller's GIT_DIR, GIT_WORK_TREE, GIT_CONFIG_COUNT/KEY/VALUE, GIT_CONFIG_PARAMETERS or GIT_AUTHOR_* would beat the fixture's
     LOCAL git config or point the agent's git at the caller's own repository. Not thread-safe, which this harness is not.
     """
@@ -145,9 +145,9 @@ def grade_trial(row, events, states, plugin_path=""):
     case = checks.Case(row, events, states, exit_code=(states.get("run") or {}).get("exit_code"), plugin_path=str(plugin_path))
     results = [{"id": cid, "pass": ok, "notes": note} for cid, ok, note in checks.run_checks(case)]
     result = trace.result_event(events) or {}
-    # the cost of the LAST result event: agent_trace.stats() sums every result event, which double-counts a resumed session
-    return {"verdict": verdict(results), "warnings": warn_ids(results), "checks": results, "turns": result.get("num_turns"),
-            "cost": result.get("total_cost_usd"), "duration_ms": result.get("duration_ms")}
+    turns, cost = trace.stats(events)
+    return {"verdict": verdict(results), "warnings": warn_ids(results), "checks": results, "turns": turns,
+            "cost": cost, "duration_ms": result.get("duration_ms")}
 
 
 def warn_ids(results):

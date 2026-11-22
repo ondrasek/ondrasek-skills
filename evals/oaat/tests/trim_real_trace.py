@@ -3,7 +3,7 @@
     python3 tests/trim_real_trace.py artifacts/explicit-name.jsonl tests/fixtures/traces/real/explicit-name.jsonl
 
 A real stream carries your working directory, memory paths, session id, the full lists of your tools and skills, and the
-skill text as a tool result. This script keeps only what `python/agent_trace.py` reads, so the file is safe to commit:
+skill text as a tool result. This script keeps only what `evals/_common/python/agent_trace.py` reads, so the file is safe to commit:
 
     system/init   type, subtype, model, claude_code_version, session_id (replaced by REAL-<id>), skills and tools
                   (cut to the entries that the checks look for: the skill under test and the Skill tool)

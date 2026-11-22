@@ -1,6 +1,6 @@
 """Builds the INVENTED fixture traces in tests/fixtures/traces/{after,before}/<id>.jsonl.
 
-Nothing here comes from a model. Every event is written by hand in the stream-json shape (see python/agent_trace.py), marked by
+Nothing here comes from a model. Every event is written by hand in the stream-json shape (see evals/_common/python/agent_trace.py), marked by
 session ids that start with INVENTED, the model name invented-model and a made-up cost. The `after` set is what a good
 version of the skill would produce for each prompt. The `before` set is the same run with five defects, as if the skill
 text were not edited yet:

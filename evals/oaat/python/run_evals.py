@@ -14,11 +14,15 @@ import sys
 import tempfile
 from pathlib import Path
 
-import cases
-import checks
-import judge
-import runner_cmd
-import agent_trace as trace
+COMMON = Path(__file__).resolve().parents[2] / "_common" / "python"   # evals/_common/python: the shared agent_trace and runner_cmd
+if str(COMMON) not in sys.path:
+    sys.path.insert(0, str(COMMON))
+
+import cases  # noqa: E402
+import checks  # noqa: E402
+import judge  # noqa: E402
+import runner_cmd  # noqa: E402
+import agent_trace as trace  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 UNIT = HERE.parent

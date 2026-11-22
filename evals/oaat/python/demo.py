@@ -14,9 +14,13 @@ import sys
 import tempfile
 from pathlib import Path
 
-import judge
-import report
-import run_evals
+COMMON = Path(__file__).resolve().parents[2] / "_common" / "python"   # evals/_common/python: the shared agent_trace and runner_cmd
+if str(COMMON) not in sys.path:
+    sys.path.insert(0, str(COMMON))
+
+import judge  # noqa: E402
+import report  # noqa: E402
+import run_evals  # noqa: E402
 
 UNIT = Path(__file__).resolve().parent.parent
 PROMPTS = UNIT / "evals" / "prompts.csv"

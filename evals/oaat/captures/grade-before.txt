@@ -33,6 +33,6 @@ failures:
   negative-list trial 1: no-oaat-header: 'Item N of M' headers in the reply: 1; expected 0
 
 checks passed by group: outcome 35/43, process 20/22, style 29/37, efficiency 30/30
-cost reported by the result events: $0.2270 over 11 runs
+cost reported by the result events: $0.1760 over 11 runs
 summary: prompts passed 6/11 (every trial), trials passed 6/11, pass rate 54%
 (exit code 1)

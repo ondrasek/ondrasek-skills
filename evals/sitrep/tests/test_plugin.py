@@ -19,15 +19,15 @@ PLUGIN = run_evals.PLUGIN
 SKILL_DIR = PLUGIN / "skills" / "sitrep"
 SCRIPT = SKILL_DIR / "scripts" / "report.sh"
 SKILL_MD = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
-SIBLING = UNIT.parent / "agent-md-audit" / "python"
 
 
-class Copies(unittest.TestCase):
-    def test_the_parser_and_the_command_runner_are_byte_identical_to_the_agent_md_audit_copies(self):
-        if not SIBLING.is_dir():
-            self.skipTest("evals/agent-md-audit is not here")
-        for name in ("agent_trace.py", "runner_cmd.py"):
-            self.assertEqual((UNIT / "python" / name).read_bytes(), (SIBLING / name).read_bytes(), f"{name} drifted from the copy it must equal")
+class Shared(unittest.TestCase):
+    def test_the_parser_and_the_command_runner_are_the_shared_ones(self):
+        import agent_trace
+        import runner_cmd
+        for module in (agent_trace, runner_cmd):
+            self.assertEqual(Path(module.__file__).resolve().parent, UNIT.parent / "_common" / "python", module.__name__)
+            self.assertFalse((UNIT / "python" / f"{module.__name__}.py").exists(), "a local copy: delete it")
 
 
 class Skill(unittest.TestCase):

@@ -1,4 +1,4 @@
-"""The plugin under test still has the properties the evals rely on, and the copied modules are still copies."""
+"""The plugin under test still has the properties the evals rely on, and the harness uses the shared modules, not copies of them."""
 import json
 import re
 import unittest
@@ -11,14 +11,15 @@ UNIT = Path(__file__).resolve().parents[1]
 REPO = UNIT.parents[1]
 PLUGIN = REPO / "plugins" / "auto-commit"
 HOOK = PLUGIN / "hooks" / "auto-commit.sh"
-REFERENCE = REPO / "evals" / "agent-md-audit" / "python"
 
 
-class Copies(unittest.TestCase):
-    @unittest.skipUnless(REFERENCE.is_dir(), "evals/agent-md-audit is not here")
-    def test_the_copied_modules_are_byte_identical_to_the_reference(self):
-        for name in ("agent_trace.py", "runner_cmd.py"):
-            self.assertEqual((UNIT / "python" / name).read_bytes(), (REFERENCE / name).read_bytes(), f"{name} drifted: fix both copies")
+class Shared(unittest.TestCase):
+    def test_the_parser_and_the_command_runner_are_the_shared_ones(self):
+        import agent_trace
+        import runner_cmd
+        for module in (agent_trace, runner_cmd):
+            self.assertEqual(Path(module.__file__).resolve().parent, UNIT.parent / "_common" / "python", module.__name__)
+            self.assertFalse((UNIT / "python" / f"{module.__name__}.py").exists(), "a local copy: delete it")
 
 
 class Plugin(unittest.TestCase):

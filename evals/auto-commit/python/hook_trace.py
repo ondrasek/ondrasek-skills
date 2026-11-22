@@ -1,6 +1,6 @@
 """What a stream-json trace says about plugins, hooks, Bash calls and permission denials.
 
-Built on agent_trace.py (copied unchanged), for the facts a hook plugin's evals need. Shapes read, none of them guaranteed by
+Built on the shared agent_trace.py (evals/_common/python), for the facts a hook plugin's evals need. Shapes read, none of them guaranteed by
 the documentation unless noted (the README lists them as unconfirmed):
 
     {"type": "system", "subtype": "init", "plugins": [{"name": "auto-commit", "source": "auto-commit@inline", "path": "..."}], "plugin_errors": [...]}

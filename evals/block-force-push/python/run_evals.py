@@ -106,14 +106,14 @@ def grade_trial(row, events, states, run_note=""):
     case = checks.Case.build(row, events, states)
     results = [{"id": cid, "pass": ok, "notes": note, "group": checks.GROUPS[cid]} for cid, ok, note in checks.run_checks(case)]
     result = trace.result_event(events) or {}
-    cost, turns = result.get("total_cost_usd"), result.get("num_turns")
+    turns, cost = trace.stats(events)
     # no events at all: the agent never ran (not installed, not logged in, no recording): nothing was exercised;
     # no snapshots (a recording without its <id>.state.json): the repositories, the ground truth, were never seen
     complete = bool(events) and bool((states or {}).get("before")) and bool((states or {}).get("after"))
     aborted = abort_reason(events, run_note) if events else ""
     verdict = checks.verdict([r["id"] for r in results if not r["pass"]], bool(aborted)) if complete else "INCONCLUSIVE"
-    return {"verdict": verdict, "aborted": aborted, "checks": results, "turns": turns if isinstance(turns, int) else None,
-            "cost": cost if isinstance(cost, (int, float)) else None, "duration_ms": result.get("duration_ms")}
+    return {"verdict": verdict, "aborted": aborted, "checks": results, "turns": turns,
+            "cost": cost, "duration_ms": result.get("duration_ms")}
 
 
 def run_all(rows, args):

@@ -1,4 +1,4 @@
-"""The plugin under test still has the properties the evals rely on, and the two copied files still match their source."""
+"""The plugin under test still has the properties the evals rely on, and the harness uses the shared trace reader and command runner."""
 import json
 import re
 import unittest
@@ -9,19 +9,18 @@ import checks
 import fixtures
 
 UNIT = Path(__file__).resolve().parents[1]
-REFERENCE = UNIT.parent / "agent-md-audit" / "python"
 PLUGIN = helpers.PLUGIN_DIR
 SKILL = PLUGIN / "skills" / "milestones" / "SKILL.md"
 HOOK = PLUGIN / "hooks" / "milestones-reminder.sh"
 
 
-class Copies(unittest.TestCase):
-    def test_the_copied_files_are_byte_identical_to_agent_md_audit(self):
-        for name in ("agent_trace.py", "runner_cmd.py"):
-            source = REFERENCE / name
-            if not source.is_file():
-                self.skipTest(f"{source} is missing")
-            self.assertEqual((UNIT / "python" / name).read_bytes(), source.read_bytes(), f"{name} drifted: fix both copies")
+class Shared(unittest.TestCase):
+    def test_the_parser_and_the_command_runner_are_the_shared_ones(self):
+        import agent_trace
+        import runner_cmd
+        for module in (agent_trace, runner_cmd):
+            self.assertEqual(Path(module.__file__).resolve().parent, UNIT.parent / "_common" / "python", module.__name__)
+            self.assertFalse((UNIT / "python" / f"{module.__name__}.py").exists(), "a local copy: delete it")
 
 
 class Skill(unittest.TestCase):

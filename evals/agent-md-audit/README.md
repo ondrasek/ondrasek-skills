@@ -2,7 +2,7 @@
 
 Run the skill on fixed prompts in throwaway repositories and grade what it did. The files are the ground truth: the skill promises to change nothing until the user approves, and a transcript can only claim that, so every run snapshots the workspace.
 
-**Status: the offline part is verified, the real run is not.** The unit tests (51) exercise the checks on invented traces and the runner against a stub agent. Nobody has yet run `make eval` against a live `claude`, so the regex checks may need loosening after the first real trace.
+**Status: the offline part is verified, the real run is not.** The unit tests (52) exercise the checks on invented traces and the runner against a stub agent. Nobody has yet run `make eval` against a live `claude`, so the regex checks may need loosening after the first real trace.
 
 ## Why not `claude plugin eval`
 
@@ -54,4 +54,4 @@ python3 evals/agent-md-audit/python/run_evals.py --fixtures DIR        # grade r
 
 ## Provenance
 
-`python/agent_trace.py` and `python/runner_cmd.py` are copied unchanged from [`evals/oaat/python/`](../oaat/python) (the stream-json parser and the command runner). The rest is specific to this skill. If you fix one copy, fix the other.
+`agent_trace` (the stream-json parser) and `runner_cmd` (the command runner) are not in this directory: they are the shared modules in [`evals/_common/python/`](../_common/python), put on `sys.path` by `python/run_evals.py` and `tests/helpers.py`. Fix them there and run `make -C evals/_common test-all`; this directory does not run without that sibling. The rest is specific to this skill.

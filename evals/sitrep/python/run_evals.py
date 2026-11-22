@@ -132,13 +132,11 @@ def grade_trial(row, events, states, note=""):
     case = checks.Case.build(row, events, states, note)
     outcomes = checks.run_checks(case)
     result = trace.result_event(events) or {}
-    # the cost of the LAST result event: assumed (unconfirmed) to be the whole session's on a resumed turn, in which case trace.stats
-    # (a sum over result events) would count turn 1 twice
-    cost = result.get("total_cost_usd")
+    turns, cost = trace.stats(events)   # the cost of the LAST result event: a resumed turn reports the whole session (evals/_common/README.md)
     verdict = checks.verdict(case, outcomes)
     return {"verdict": verdict, "passed": verdict == "PASS", "warnings": checks.warnings(outcomes),
             "checks": [{"id": c, "group": checks.GROUPS[c], "pass": ok, "notes": note} for c, ok, note in outcomes],
-            "turns": result.get("num_turns"), "cost": cost if isinstance(cost, (int, float)) else None, "duration_ms": result.get("duration_ms")}
+            "turns": turns, "cost": cost, "duration_ms": result.get("duration_ms")}
 
 
 def run_all(rows, args):

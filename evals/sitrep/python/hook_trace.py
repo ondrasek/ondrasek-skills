@@ -1,4 +1,4 @@
-"""More questions about a stream-json trace than agent_trace.py (a byte-identical copy that must not change) answers.
+"""More questions about a stream-json trace than agent_trace.py (shared, evals/_common/python) answers.
 
 Shapes used, and where they are known from:
 
