@@ -331,7 +331,8 @@ def not_permission_blocked(case):
     blocked += [c[:60] for c in leftovers if succeeded.get(script_key(c), 0) <= owed.get(script_key(c), 0) and owed.get(script_key(c), 0) > 0]
     blocked = list(dict.fromkeys(blocked))
     return "not-permission-blocked", not blocked, (f"denied calls to milestones.py: {len(denied_ids) + sum(owed.values())}; never retried successfully: "
-                                                  f"{blocked or 'none'} (a denial means the grant did not match)")
+                                                  f"{blocked or 'none'} (a denial means the grant did not match. Known cause: a call through a shell "
+                                                  f"variable, `S=...; python3 \"$S\" ...`, which no pattern can grant under dontAsk; rerun the trial)")
 
 
 def hooks_ran(case):

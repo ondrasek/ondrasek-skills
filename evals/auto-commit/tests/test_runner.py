@@ -236,7 +236,8 @@ class AgentCommand(unittest.TestCase):
             self.assertIn(needle, cmd)
         self.assertNotIn("--bare", tokens)
         self.assertLess(tokens.index("{prompt}"), tokens.index("--allowedTools"))
-        self.assertEqual(tokens[tokens.index("--permission-mode") + 1], "dontAsk")
+        # acceptEdits, not dontAsk: dontAsk denies any output redirect (probe of the real CLI), and the agent writes .gitignore on purpose
+        self.assertEqual(tokens[tokens.index("--permission-mode") + 1], "acceptEdits")
         self.assertEqual(tokens[tokens.index("--allowedTools") + 1], run_evals.ALLOWED)
         self.assertTrue((run_evals.PLUGIN / ".claude-plugin" / "plugin.json").is_file())
 
