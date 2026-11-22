@@ -66,6 +66,24 @@ class RealTable(unittest.TestCase):
         # 4 of 5 real trials, which tests discovery, not the milestone integration this case is for (see the README)
         self.assertIn("docs/open-questions.md", by_id["with-milestones"].prompt)
 
+    def test_discover_open_items_is_with_milestones_with_the_original_vague_prompt(self):
+        # It measures SKILL.md step 1 (plugin sitrep 0.3.1: look in the working tree for notes and open-question documents even when a
+        # tracker exists): same fixture and expectations as with-milestones, but the prompt must not name the file, or nothing is measured.
+        by_id = {r.id: r for r in self.rows}
+        discover, named = by_id["discover-open-items"], by_id["with-milestones"]
+        self.assertEqual((discover.should_trigger, discover.kind, discover.fixture, discover.expect, discover.reply),
+                         (named.should_trigger, named.kind, named.fixture, named.expect, named.reply))
+        self.assertEqual((discover.fixture, discover.expect, discover.kind), ("open-items-ms", "report-ms", "milestones"))
+        self.assertEqual(discover.prompt, "Show me the situation: what's the state of things in this project right now?")
+        self.assertTrue(named.prompt.startswith(discover.prompt))
+        for word in ("open-questions", "docs/", ".md"):
+            self.assertNotIn(word, discover.prompt)
+
+    def test_the_shipped_table_has_these_cases_in_this_order(self):
+        self.assertEqual([r.id for r in self.rows],
+                         ["explicit-report", "implicit-big-picture", "with-milestones", "discover-open-items", "feedback-paste",
+                          "negative-plain-list", "negative-code", "negative-clean-tree"])
+
 
 class Validation(unittest.TestCase):
     def test_a_valid_row(self):
