@@ -1,0 +1,8 @@
+id,should_trigger,kind,fixture,expect,prompt,reply
+explicit-report,true,explicit,open-items,report-clean,"Use the sitrep skill to give me a situation report of everything that is open in docs/open-questions.md.","Thanks, I'm done with the report. You can clean it up."
+implicit-big-picture,true,implicit,open-items,report,"I've lost the overview. Can you show me the big picture of everything that is still open in this project (decisions, risks, blockers) as something visual rather than a list?",
+with-milestones,true,milestones,open-items-ms,report-ms,"Show me the situation: what's the state of things in this project right now?",
+feedback-paste,true,feedback,open-items,feedback,"{""sitrep"": ""Open questions"", ""for_claude"": ""Feedback from the sitrep report: comments and resolved flags per item id."", ""items"": [{""id"": ""db"", ""n"": 1, ""title"": ""Pick the database"", ""comment"": ""Go with Postgres, we will need concurrent writers.""}, {""id"": ""sso"", ""n"": 2, ""title"": ""SSO vendor"", ""resolved"": true}]}",
+negative-plain-list,false,negative,open-items,none,"List the open questions in docs/open-questions.md as a plain bulleted list here in the chat, nothing else.",
+negative-code,false,negative,bare,none,"Add a docstring to the function in src/textutil.py.",
+negative-clean-tree,false,negative,bare,none,"Is the working tree clean? Answer yes or no.",

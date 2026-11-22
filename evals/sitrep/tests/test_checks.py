@@ -1,0 +1,567 @@
+"""Every check has a passing run and a failing one. A test fails when a check id has no failing run (see test_every_check_is_mutated)."""
+import re
+import unittest
+
+import helpers  # noqa: F401  (puts python/ on the path: first)
+import checks
+from helpers import CLEAN, DIR, GOOD_REPLY, LISTED_REPLY, NEW, PLUGIN, REPORT_CALLS, SKILL, TRACKER, WS
+
+
+def data_with(ms=False, **change):
+    data = helpers.good_data(ms)
+    data.update(change)
+    return data
+
+
+def without_deps():
+    data = helpers.good_data()
+    for entry in data["items"]:
+        entry["dependsOn"] = []
+    return data
+
+
+def without_next():
+    data = helpers.good_data()
+    del data["next"]
+    return data
+
+
+def with_bad_values():
+    data = helpers.good_data()
+    data["items"][0].update(impact=5, type="todo")
+    return data
+
+
+def three_items():
+    data = helpers.good_data()
+    data["items"] = [i for i in data["items"] if i["id"] in ("db", "sso", "migration")]
+    return data
+
+
+def ms_without_item():
+    data = helpers.good_data(ms=True)
+    data["items"] = [i for i in data["items"] if not i["id"].startswith("ms-")]
+    return data
+
+
+def ms_wrong_strip():
+    data = helpers.good_data(ms=True)
+    data["milestones"] = {"title": "To release 1.0", "done": 0, "total": 3, "current": "Schema design"}
+    return data
+
+
+# The report directory is gone: everything that reads the report fails with it (a cascade written down, not accidental)
+NO_REPORT = {"created-by-script", "report-outside-project", "index-untouched", "only-data-added", "data-defines-sitrep", "data-parses",
+             "data-valid", "items-cover-planted", "dependency-recorded", "start-here-set", "reply-hands-over"}
+# a report directory that report.sh was tried for but that was not found: created-by-script saw the call
+TRIED_NO_REPORT = NO_REPORT - {"created-by-script"}
+# a data.js that is not there: what reads or parses it fails with it
+NO_DATA = {"data-defines-sitrep", "data-parses", "data-valid", "items-cover-planted", "dependency-recorded", "only-data-added", "start-here-set"}
+# data.js that does not parse leaves nothing for the checks that read the parsed object
+UNPARSED = {"data-valid", "items-cover-planted", "dependency-recorded", "start-here-set"}
+
+# check id -> (expect, override of helpers.good that makes it fail, ids that fail with it by necessity); the rest of the failing
+# set must be empty: a mutation that breaks another check by accident is a bug in the mutation
+MUTATIONS = {
+    "run-completed": ("none", dict(result_subtype="error_max_budget_usd"), set()),
+    "skill-loaded": ("report", dict(skills=()), set()),
+    "skill-trigger": ("none", dict(calls1=[("Skill", {"skill": SKILL})], should_trigger=False), set()),
+    "not-permission-blocked": ("report", dict(denials=[{"tool_name": "Write", "tool_input": {"file_path": DIR + "/data.js"}}]), set()),
+    "report-located": ("report", dict(calls1=[("Skill", {"skill": SKILL}), ("Bash", {"command": NEW}, "")], report_found=False, tmp_sitrep=[]), TRIED_NO_REPORT),
+    "created-by-script": ("report", dict(calls1=[("Skill", {"skill": SKILL}), ("Bash", {"command": "mkdir -p /tmp/sitrep-report"}, ""),
+                                                 ("Write", {"file_path": "/tmp/sitrep-report/index.html"})]), set()),
+    "report-outside-project": ("report", dict(report_dir=WS + "/sitrep.Ab12Cd"), set()),
+    "project-untouched": ("report", dict(after1_extra={"sitrep.html": "<html></html>"}), set()),
+    "data-defines-sitrep": ("report", dict(report_patch={"data_text": "var SITREP = {};"}), set()),
+    "data-parses": ("report", dict(data=helpers.data_js(helpers.good_data())[:300]), UNPARSED),
+    "data-valid": ("report", dict(data=with_bad_values()), set()),
+    "index-untouched": ("report", dict(index="<html>edited by the agent</html>\n"), set()),
+    "only-data-added": ("report", dict(extra_files={"notes.md": "scratch"}), set()),
+    "items-cover-planted": ("report", dict(data=three_items()), set()),
+    "dependency-recorded": ("report", dict(data=without_deps()), set()),
+    "start-here-set": ("report", dict(data=without_next()), set()),
+    "milestone-item": ("report-ms", dict(data=ms_without_item()), set()),
+    "milestone-strip": ("report-ms", dict(data=ms_wrong_strip()), set()),
+    "tracker-untouched": ("report-ms", dict(after1_extra={TRACKER: "{}\n"}), {"project-untouched"}),
+    "reply-hands-over": ("report", dict(reply1=LISTED_REPLY), set()),
+    "report-cleaned": ("report-clean", dict(report2_exists=True), set()),
+    "cleaned-by-script": ("report-clean", dict(calls2=[("Bash", {"command": f"rm -rf {DIR}"}, "")]), set()),
+    "no-report-when-negative": ("none", dict(tmp_sitrep=["sitrep.Ab12Cd"]), set()),
+}
+SCRIPT_Q = f'"{helpers.SCRIPT}"'
+
+
+def with_items(**by_id):
+    """good data whose items are changed by id: {id: dict of changes}, or {id: None} to drop the item."""
+    data = helpers.good_data()
+    data["items"] = [{**i, **by_id.get(i["id"], {})} for i in data["items"] if by_id.get(i["id"], {}) is not None]
+    return data
+
+
+def reversed_dependency():
+    return with_items(db={"detail": "Postgres or SQLite; unblocks the schema migration", "dependsOn": ["migration"]},
+                      migration={"detail": "The migration scripts differ between Postgres and SQLite", "dependsOn": []})
+
+
+TABLE = "\n\n| # | item |\n|---|---|\n" + "\n".join(f"| {n} | {t} |" for n, t in enumerate(("Pick the database", "SSO vendor", "Font licences", "Data retention", "Schema migration"), 1))
+BOLD = "\n" + "\n".join(f"**#{n} {t}**" for n, t in enumerate(("Pick the database", "SSO vendor", "Font licences", "Data retention", "Schema migration"), 1))
+DENIED_WRITE = [("Skill", {"skill": SKILL}), ("Bash", {"command": NEW}, DIR + "\n"),
+                ("Write", {"file_path": DIR + "/data.js", "content": "..."}, "Claude requested permissions to write to data.js, but you haven't granted it yet.")]
+RM_DENIED = REPORT_CALLS + [("Bash", {"command": f"rm {DIR}/data.js"}, "Permission to use Bash has been denied.")]
+RM_DENIAL = [{"tool_name": "Bash", "tool_input": {"command": f"rm {DIR}/data.js"}}]
+# (label, check id, expect, override, cascade): further failing runs of a check, the reviewer's and the ones a check was fixed for
+MORE_MUTATIONS = [
+    ("a turn that ends in an error result", "run-completed", "feedback", dict(result_subtype="error_during_execution"), set()),
+    ("a refusal that reaches the trace only as tool_result text", "not-permission-blocked", "report", dict(calls1=DENIED_WRITE, omit_data=True), NO_DATA),
+    ("a refused rm of data.js plus an edited index.html", "index-untouched", "report", dict(calls1=RM_DENIED, denials=RM_DENIAL, index="<html>edited</html>\n"), {"not-permission-blocked"}),
+    ("a table of every item in the reply", "reply-hands-over", "report", dict(reply1=GOOD_REPLY + TABLE), set()),
+    ("bold lines of every item in the reply", "reply-hands-over", "report", dict(reply1=GOOD_REPLY + BOLD), set()),
+    ("a reply that says index.html but names no directory", "reply-hands-over", "report", dict(reply1="I could not open index.html. Copy JSON is not available here."), set()),
+    ("a dependency recorded backwards", "dependency-recorded", "report", dict(data=reversed_dependency()), set()),
+    ("the compound `clean || /bin/rm -rf`", "cleaned-by-script", "report-clean", dict(calls2=[("Bash", {"command": f"{SCRIPT_Q} clean {DIR} || /bin/rm -rf {DIR}"}, "")]), set()),
+    ("find -delete instead of clean", "cleaned-by-script", "report-clean", dict(calls2=[("Bash", {"command": f"find {DIR} -delete"}, "")]), set()),
+    ("the retention item dropped, the word kept in another item", "items-cover-planted", "report",
+     dict(data=with_items(retention=None, sso={"detail": "Choose between the two shortlisted vendors. Retention is also unclear."})), set()),
+    ("a data.js that starts with an import", "data-parses", "report", dict(data="import x from 'y';\n" + helpers.data_js(helpers.good_data())), UNPARSED),
+    ("a report page written into the workspace by a negative case", "no-report-when-negative", "none", dict(after1_extra={"open-questions.html": "<html></html>"}), set()),
+    ("a data.js written into the workspace by a negative case", "no-report-when-negative", "none", dict(after1_extra={"docs/data.js": "window.SITREP = {};"}), set()),
+    ("two plugins named sitrep", "skill-loaded", "report", dict(plugins=("sitrep", "sitrep")), set()),
+    ("the sitrep plugin loaded from another path", "skill-loaded", "report", dict(plugin_path="/installed/sitrep"), set()),
+    ("report.sh run from outside the plugin under test", "skill-loaded", "report",
+     dict(calls1=[("Skill", {"skill": SKILL}), ("Bash", {"command": '"/installed/sitrep/skills/sitrep/scripts/report.sh" new'}, DIR + "\n"), REPORT_CALLS[2]]), set()),
+]
+ALL_EXPECTS = ("none", "feedback", "report", "report-clean", "report-ms")
+
+
+def run(expect, **override):
+    row, events, states = helpers.good(expect, **override)
+    return [(cid, ok, note) for cid, ok, note in checks.run_checks(checks.Case.build(row, events, states))]
+
+
+def failed(expect, **override):
+    return {cid for cid, ok, _ in run(expect, **override) if not ok}
+
+
+def passes(cid, expect="report", **override):
+    return {c: ok for c, ok, _ in run(expect, **override)}[cid]
+
+
+class GoodRuns(unittest.TestCase):
+    def test_every_good_run_passes_every_check(self):
+        for expect in ALL_EXPECTS:
+            for cid, ok, note in run(expect):
+                self.assertTrue(ok, f"{expect}: {cid}: {note}")
+
+    def test_every_check_runs_for_some_expect(self):
+        self.assertEqual({f.__name__.replace("_", "-") for fs in checks.BY_EXPECT.values() for f in fs}, set(checks.GROUPS))
+
+    def test_the_checks_that_run_are_known(self):
+        for expect in ALL_EXPECTS:
+            self.assertLessEqual({cid for cid, _, _ in run(expect)}, set(checks.GROUPS))
+
+    def test_the_milestone_checks_run_only_for_the_milestone_case(self):
+        ids = {e: {cid for cid, _, _ in run(e)} for e in ALL_EXPECTS}
+        for cid in ("milestone-item", "milestone-strip", "tracker-untouched"):
+            self.assertEqual([e for e in ALL_EXPECTS if cid in ids[e]], ["report-ms"])
+        self.assertEqual([e for e in ALL_EXPECTS if "report-cleaned" in ids[e]], ["report-clean"])
+
+
+class Mutations(unittest.TestCase):
+    def test_every_check_is_mutated(self):
+        self.assertEqual(set(MUTATIONS), set(checks.GROUPS))
+
+    def test_each_mutation_fails_its_check_and_exactly_the_written_cascade(self):
+        for cid, (expect, override, cascade) in MUTATIONS.items():
+            with self.subTest(check=cid):
+                self.assertEqual(failed(expect, **override), {cid} | cascade)
+
+    def test_every_further_failing_run_fails_its_check_and_exactly_the_written_cascade(self):
+        for label, cid, expect, override, cascade in MORE_MUTATIONS:
+            with self.subTest(mutation=label):
+                self.assertEqual(failed(expect, **override), {cid} | cascade)
+
+    def test_the_further_runs_name_known_checks(self):
+        self.assertLessEqual({cid for _, cid, *_ in MORE_MUTATIONS}, set(checks.GROUPS))
+
+
+class Verdict(unittest.TestCase):
+    def verdict(self, expect, **override):
+        return checks.verdict(run(expect, **override))
+
+    def test_pass_fail_and_inconclusive(self):
+        self.assertEqual(self.verdict("report"), "PASS")
+        self.assertEqual(self.verdict("report", data=with_bad_values()), "FAIL")
+        mutation = MUTATIONS["not-permission-blocked"]
+        self.assertEqual(self.verdict(mutation[0], **mutation[1]), "INCONCLUSIVE")
+
+    def test_a_missing_report_is_inconclusive_and_still_lists_the_failed_gate_checks(self):
+        expect, override, _ = MUTATIONS["report-located"]
+        results = run(expect, **override)
+        self.assertEqual(checks.verdict(results), "INCONCLUSIVE")
+        self.assertIn("only-data-added", {cid for cid, ok, _ in results if not ok})
+
+    def test_a_write_into_the_project_beats_a_failed_precondition(self):
+        blocked = dict(denials=[{"tool_name": "Bash", "tool_input": {"command": NEW}}], after1_extra={"sitrep.html": "x"})
+        self.assertEqual(self.verdict("report", **blocked), "FAIL")
+
+    def test_a_skill_that_did_not_trigger_beats_a_failed_precondition(self):
+        self.assertEqual(self.verdict("report", calls1=[], report_found=False), "FAIL")
+
+    def test_a_plugin_that_did_not_load_is_inconclusive_not_a_failure_of_the_skill(self):
+        self.assertEqual(self.verdict("report", skills=(), calls1=[], report_found=False), "INCONCLUSIVE")
+        self.assertEqual(self.verdict("none", plugins=(), skills=()), "INCONCLUSIVE")
+
+    def test_a_write_into_the_project_is_a_failure_even_when_the_plugin_did_not_load(self):
+        self.assertEqual(self.verdict("feedback", skills=(), after1_extra={"notes.md": "x"}), "FAIL")
+
+    def test_groups(self):
+        self.assertEqual(sorted(cid for cid, g in checks.GROUPS.items() if g == "precondition"), ["not-permission-blocked", "report-located", "run-completed"])
+        self.assertEqual(set(checks.GROUPS.values()), {"precondition", "process", "gate", "outcome"})
+
+
+class Process(unittest.TestCase):
+    def test_a_plugin_that_loaded_without_its_skill_listed_is_not_loaded(self):
+        self.assertFalse(passes("skill-loaded", skills=("update-config",)))
+
+    def test_a_skill_listed_without_the_plugin_is_not_loaded(self):
+        self.assertFalse(passes("skill-loaded", plugins=()))
+
+    def test_a_trace_without_init_is_not_loaded(self):
+        row, events, states = helpers.good("none")
+        events = [e for e in events if e.get("subtype") != "init"]
+        results = {c: ok for c, ok, _ in checks.run_checks(checks.Case.build(row, events, states))}
+        self.assertFalse(results["skill-loaded"])
+
+    def test_a_negative_without_the_skill_passes_and_a_positive_without_it_fails(self):
+        self.assertTrue(passes("skill-trigger", expect="none", should_trigger=False))
+        self.assertFalse(passes("skill-trigger", calls1=[("Read", {"file_path": "x"})]))
+
+    def test_the_report_is_made_by_the_script(self):
+        self.assertTrue(passes("created-by-script", calls1=[("Skill", {"skill": SKILL}), ("Bash", {"command": "report.sh new"}, DIR)]))
+        self.assertFalse(passes("created-by-script", calls1=[("Skill", {"skill": SKILL})]))
+        self.assertFalse(passes("created-by-script", calls1=REPORT_CALLS + [("Bash", {"command": "mktemp -d"}, "x")]))
+
+    def test_script_calls_in_the_spelling_skill_md_gives(self):
+        for command in (NEW, f"{SCRIPT_Q} new", "report.sh new", "'/x/report.sh' new"):
+            self.assertTrue(checks.state.REPORT_NEW_RE.search(command), command)
+        for command in (CLEAN, f"{SCRIPT_Q} clean /x", "report.sh clean /x"):
+            self.assertTrue(checks.state.REPORT_CLEAN_RE.search(command), command)
+        self.assertIsNone(checks.state.REPORT_NEW_RE.search(CLEAN))
+        self.assertIsNone(checks.state.REPORT_CLEAN_RE.search(NEW))
+        self.assertIsNone(checks.state.REPORT_NEW_RE.search("cat report.sh"))
+
+    def test_rm_commands(self):
+        for command in (f"rm -rf {DIR}", f"cd /x && rm -r {DIR}", f"rmdir {DIR}", f"unlink {DIR}", f"{CLEAN} || /bin/rm -rf {DIR}", f"/usr/bin/env rm -r {DIR}",
+                        f"find {DIR} -delete", f"python3 -c 'import shutil; shutil.rmtree(\"{DIR}\")'", f"true;rm {DIR}"):
+            self.assertTrue(checks.RM_RE.search(command), command)
+        for command in (CLEAN, "cat /home/form /x", "report.sh clean /x/sitrep.a", "ls /x/perm ", "cat /x/Makefile.rm.bak ", "find /x -name '*.js'"):
+            self.assertIsNone(checks.RM_RE.search(command), command)
+
+    def test_clean_by_the_script_names_the_recorded_directory(self):
+        other = [("Bash", {"command": f'"{helpers.SCRIPT}" clean /r/tmp/sitrep.Other1'}, "")]
+        self.assertFalse(passes("cleaned-by-script", expect="report-clean", calls2=other))
+        self.assertFalse(passes("cleaned-by-script", expect="report-clean", calls2=[]))
+        both = [("Bash", {"command": CLEAN}, ""), ("Bash", {"command": f"rm -rf {DIR}"}, "")]
+        self.assertFalse(passes("cleaned-by-script", expect="report-clean", calls2=both))
+
+    def test_clean_needs_a_second_turn(self):
+        row, events, states = helpers.good("report-clean")
+        events = events[:events.index(next(e for e in events if e.get("type") == "result")) + 1]
+        results = {c: ok for c, ok, _ in checks.run_checks(checks.Case.build(row, events, states))}
+        self.assertFalse(results["cleaned-by-script"])
+
+
+class Precondition(unittest.TestCase):
+    def test_the_denied_browser_open_is_expected(self):
+        denial = {"tool_name": "Bash", "tool_input": {"command": f'open "{DIR}/index.html"'}}
+        self.assertTrue(passes("not-permission-blocked", denials=[denial]))
+
+    def test_denials_of_report_sh_data_js_and_of_unknown_shape_block(self):
+        for denial in ({"tool_name": "Bash", "tool_input": {"command": NEW}}, {"tool_name": "Edit", "tool_input": {"file_path": DIR + "/data.js"}},
+                       {"detail": f"denied {NEW}"}):
+            self.assertFalse(passes("not-permission-blocked", denials=[denial]), denial)
+
+    def test_a_denial_of_another_tool_does_not_block(self):
+        self.assertTrue(passes("not-permission-blocked", denials=[{"tool_name": "WebFetch", "tool_input": {"url": "https://x/report.sh"}}]))
+
+    def test_a_denial_in_the_first_turn_of_two_is_seen(self):
+        self.assertFalse(passes("not-permission-blocked", expect="report-clean", denials=[{"tool_name": "Write", "tool_input": {"file_path": DIR + "/data.js"}}]))
+
+    def test_the_report_must_exist(self):
+        self.assertFalse(passes("report-located", report_patch={"exists": False}))
+
+
+class Gates(unittest.TestCase):
+    def test_a_report_inside_the_workspace_or_named_otherwise_fails(self):
+        self.assertFalse(passes("report-outside-project", report_dir=WS + "/sitrep.Ab12Cd"))
+        self.assertFalse(passes("report-outside-project", report_dir=WS + "/sub/../sitrep.Ab12Cd/"))
+        self.assertFalse(passes("report-outside-project", report_dir="/r/tmp/report"))
+        self.assertTrue(passes("report-outside-project", report_dir="/r/wsx/sitrep.Ab12Cd"))
+
+    def test_project_changes_in_turn_two_and_in_git_are_seen(self):
+        row, events, states = helpers.good("report-clean")
+        states["after2"] = helpers.state.snapshot_from({**helpers.fixtures.build("open-items"), "x.md": "y"}, head="h1")
+        self.assertFalse(checks.project_untouched(checks.Case.build(row, events, states))[1])
+        row, events, states = helpers.good("report-clean")
+        states["after2"] = helpers.state.snapshot_from(helpers.fixtures.build("open-items"), head="h2")
+        self.assertFalse(checks.project_untouched(checks.Case.build(row, events, states))[1])
+        row, events, states = helpers.good("report")
+        states["after1"] = helpers.state.snapshot_from(helpers.fixtures.build("open-items"), head="h1", status=" M README.md\n")
+        self.assertFalse(checks.project_untouched(checks.Case.build(row, events, states))[1])
+
+    def test_the_claude_marker_in_git_status_is_not_a_change(self):
+        row, events, states = helpers.good("report")
+        states["after1"] = helpers.state.snapshot_from(helpers.fixtures.build("open-items"), head="h1", status="?? .claude/\n")
+        self.assertTrue(checks.project_untouched(checks.Case.build(row, events, states))[1])
+
+    def test_a_two_turn_case_without_the_second_snapshot_is_not_a_write_into_the_project(self):
+        row, events, states = helpers.good("report-clean")
+        states["after2"] = None
+        case = checks.Case.build(row, events, states)
+        self.assertTrue(checks.project_untouched(case)[1])
+        self.assertIn("did not run", checks.project_untouched(case)[2])
+        self.assertFalse(checks.run_completed(case)[1])
+        states["after1"] = helpers.state.snapshot_from({**helpers.fixtures.build("open-items"), "x.md": "y"}, head="h1")
+        self.assertFalse(checks.project_untouched(checks.Case.build(row, events, states))[1])
+
+    def test_a_missing_snapshot_before_or_after_turn_one_fails(self):
+        for key in ("before", "after1"):
+            row, events, states = helpers.good("report")
+            states[key] = None
+            self.assertFalse(checks.project_untouched(checks.Case.build(row, events, states))[1], key)
+
+    def test_an_edit_to_an_existing_file_is_seen(self):
+        self.assertFalse(passes("project-untouched", after1_extra={"README.md": "changed\n"}))
+
+    def test_missing_report_files_fail_the_report_gates(self):
+        self.assertFalse(passes("index-untouched", report_patch={"files": {"data.js": "x"}}))
+        self.assertFalse(passes("only-data-added", report_patch={"files": {"index.html": "x"}}))
+
+    def test_a_tracker_that_is_gone_or_never_snapshotted_fails(self):
+        row, events, states = helpers.good("report-ms")
+        del states["after1"]["files"][TRACKER]
+        self.assertFalse(checks.tracker_untouched(checks.Case.build(row, events, states))[1])
+        row, events, states = helpers.good("report-ms")
+        states["after1"] = None
+        self.assertFalse(checks.tracker_untouched(checks.Case.build(row, events, states))[1])
+
+    def test_a_negative_run_that_ran_the_script_fails_even_when_the_directory_is_elsewhere(self):
+        self.assertFalse(passes("no-report-when-negative", expect="none", calls1=[("Bash", {"command": NEW}, "/elsewhere/sitrep.x1y2z3")]))
+
+    def test_a_negative_run_without_a_listing_fails(self):
+        row, events, states = helpers.good("none")
+        del states["tmp_sitrep"]
+        self.assertFalse(checks.no_report_when_negative(checks.Case.build(row, events, states))[1])
+
+
+class Outcome(unittest.TestCase):
+    def test_the_assignment_may_be_spelled_loosely(self):
+        for text in ("window.SITREP={};", "window . SITREP = {};", "\nwindow.SITREP = {};"):
+            self.assertTrue(passes("data-defines-sitrep", report_patch={"data_text": text}), text)
+        for text in ("window.SITREP_OLD = {};", "var SITREP = {};", "window.sitrep = {};", ""):
+            self.assertFalse(passes("data-defines-sitrep", report_patch={"data_text": text}), text)
+
+    def test_data_that_is_not_an_object_does_not_parse(self):
+        self.assertFalse(passes("data-parses", data="window.SITREP = [1, 2];\n"))
+
+    def test_the_unreadable_javascript_note_names_the_reason(self):
+        results = {c: note for c, _, note in run("report", data='window.SITREP = {title: "a" + "b", items: []};')}
+        self.assertIn("unsupported JavaScript", results["data-parses"])
+
+    def test_milestone_ids_and_values(self):
+        data = helpers.good_data(ms=True)
+        data["items"][-1]["urgency"] = 2
+        self.assertFalse(passes("milestone-item", expect="report-ms", data=data))
+        data = helpers.good_data(ms=True)
+        data["items"][-1]["type"] = "decision"
+        self.assertFalse(passes("milestone-item", expect="report-ms", data=data))
+
+    def test_the_current_milestone_is_matched_loosely(self):
+        data = helpers.good_data(ms=True)
+        data["milestones"]["current"] = "#2 Storage layer"
+        self.assertTrue(passes("milestone-strip", expect="report-ms", data=data))
+        data["milestones"]["total"] = 3
+        self.assertFalse(passes("milestone-strip", expect="report-ms", data=data))
+
+    def test_a_dependency_on_itself_does_not_count(self):
+        data = helpers.good_data()
+        for entry in data["items"]:
+            entry["dependsOn"] = []
+        data["items"][0].update(detail="Postgres migration is the question.", dependsOn=["db"])
+        self.assertFalse(passes("dependency-recorded", data=data))
+
+    def test_a_start_here_card_needs_a_title(self):
+        self.assertFalse(passes("start-here-set", data=data_with(next={"title": " ", "why": "x"})))
+        self.assertFalse(passes("start-here-set", data=data_with(next="Decide on the database")))
+
+    def test_no_items_cover_nothing(self):
+        self.assertFalse(passes("items-cover-planted", data=data_with(items=[])))
+
+    def test_every_planted_word_matters(self):
+        for key in helpers.fixtures.PLANTED:
+            data = helpers.good_data()
+            wanted = helpers.fixtures.PLANTED[key]
+            data["items"] = [i for i in data["items"] if not re.search(wanted, f"{i['title']} {i['detail']}".lower())]
+            self.assertFalse(passes("items-cover-planted", data=data), key)
+
+
+class Reply(unittest.TestCase):
+    def test_what_a_hand_over_needs(self):
+        self.assertTrue(passes("reply-hands-over"))
+        no_path = GOOD_REPLY.replace(DIR, "somewhere").replace("open", "launch")
+        no_copy = GOOD_REPLY.replace("Copy JSON", "the button")
+        long = GOOD_REPLY + "\n" + "\n".join(f"- item {n}" for n in range(5))
+        for text in (no_path, no_copy, long, LISTED_REPLY, ""):
+            self.assertFalse(passes("reply-hands-over", reply1=text), text[:40])
+
+    def test_an_open_line_without_the_directory_is_not_a_hand_over_and_four_list_lines_are_fine(self):
+        text = '! open "/somewhere/index.html"\n\nPress Copy JSON.\n' + "\n".join(f"- {n}" for n in range(4))
+        self.assertFalse(passes("reply-hands-over", reply1=text))
+        self.assertTrue(passes("reply-hands-over", reply1=text.replace("/somewhere", DIR)))
+
+    def test_two_items_named_in_passing_are_fine_three_are_the_list(self):
+        self.assertTrue(passes("reply-hands-over", reply1=GOOD_REPLY + " The SSO vendor and the data retention question are open."))
+        self.assertFalse(passes("reply-hands-over", reply1=GOOD_REPLY + " SSO, the licence audit and data retention are open."))
+
+    def test_the_directory_name_must_stand_alone(self):
+        self.assertFalse(passes("reply-hands-over", reply1="See /r/tmp/sitrep.Ab12CdXY and press Copy JSON."))
+
+    def test_the_directory_alone_counts(self):
+        self.assertTrue(passes("reply-hands-over", reply1=f"Report in {DIR}, then Copy JSON."))
+
+    def test_a_file_that_only_looks_like_the_directory_does_not(self):
+        self.assertFalse(passes("reply-hands-over", reply1="See /docs/sitrep.html and press Copy JSON."))
+
+
+class RunCompleted(unittest.TestCase):
+    def case(self, expect="none", mutate=None, note="", **override):
+        row, events, states = helpers.good(expect, **override)
+        if mutate:
+            events = mutate(events)
+        return checks.Case.build(row, events, states, note)
+
+    def test_a_trace_with_init_only_did_not_complete(self):
+        case = self.case(mutate=lambda events: [e for e in events if e.get("type") != "result"])
+        self.assertFalse(checks.run_completed(case)[1])
+        self.assertEqual(checks.verdict(checks.run_checks(case)), "INCONCLUSIVE")
+
+    def test_a_runner_note_means_the_run_did_not_complete(self):
+        case = self.case(note="agent command exited 124: timed out")
+        self.assertFalse(checks.run_completed(case)[1])
+        self.assertIn("exited 124", checks.run_completed(case)[2])
+        self.assertEqual(checks.verdict(checks.run_checks(case)), "INCONCLUSIVE")
+
+    def test_every_negative_case_is_inconclusive_when_the_run_crashed(self):
+        for kwargs in (dict(result_subtype="error_max_budget_usd"), dict(result_subtype="error_during_execution", calls1=[])):
+            self.assertEqual(checks.verdict(run("none", **kwargs)), "INCONCLUSIVE", kwargs)
+
+    def test_a_success_result_that_is_an_error_does_not_complete(self):
+        def mutate(events):
+            return [{**e, "is_error": True} if e.get("type") == "result" else e for e in events]
+        self.assertFalse(checks.run_completed(self.case(mutate=mutate))[1])
+
+    def test_a_two_turn_case_needs_two_results(self):
+        row, events, states = helpers.good("report-clean")
+        self.assertTrue(checks.run_completed(checks.Case.build(row, events, states))[1])
+        first = events[:events.index(next(e for e in events if e.get("type") == "result")) + 1]
+        self.assertFalse(checks.run_completed(checks.Case.build(row, first, states))[1])
+
+    def test_a_crashed_run_is_not_a_failure_to_trigger(self):
+        self.assertEqual(checks.verdict(run("report", result_subtype="error_max_budget_usd", calls1=[], report_found=False)), "INCONCLUSIVE")
+
+    def test_the_canary_whose_first_turn_failed_is_inconclusive_not_a_project_write(self):
+        row, events, states = helpers.good("report-clean", denials=[{"tool_name": "Write", "tool_input": {"file_path": DIR + "/data.js"}}])
+        first = events[:events.index(next(e for e in events if e.get("type") == "result")) + 1]
+        states["after2"], states["report2"] = None, None
+        results = checks.run_checks(checks.Case.build(row, first, states))
+        self.assertEqual(checks.verdict(results), "INCONCLUSIVE")
+        self.assertTrue({cid: ok for cid, ok, _ in results}["project-untouched"])
+        results = checks.run_checks(checks.Case.build(row, first, states, "agent command exited 1: budget"))
+        self.assertEqual(checks.verdict(results), "INCONCLUSIVE")
+
+
+class Findings(unittest.TestCase):
+    def test_a_skill_that_ran_no_script_is_a_failure_of_the_skill_not_of_the_environment(self):
+        calls = [("Skill", {"skill": SKILL}), ("Read", {"file_path": "/r/ws/docs/open-questions.md"})]
+        results = run("report", calls1=calls, report_found=False, tmp_sitrep=[], reply1=LISTED_REPLY)
+        ok = {cid: ok for cid, ok, _ in results}
+        self.assertTrue(ok["report-located"])
+        self.assertFalse(ok["created-by-script"])
+        self.assertEqual(checks.verdict(results), "FAIL")
+
+    def test_a_report_script_that_was_tried_and_left_nothing_is_inconclusive(self):
+        expect, override, _ = MUTATIONS["report-located"]
+        self.assertEqual(checks.verdict(run(expect, **override)), "INCONCLUSIVE")
+
+    def test_a_refusal_in_a_tool_result_alone_is_inconclusive(self):
+        expect, override = "report", dict(calls1=DENIED_WRITE, omit_data=True)
+        self.assertEqual(checks.verdict(run(expect, **override)), "INCONCLUSIVE")
+        self.assertTrue(passes("not-permission-blocked", calls1=REPORT_CALLS))
+
+    def test_a_tool_result_that_only_contains_the_word_in_another_tool_does_not_block(self):
+        calls = REPORT_CALLS + [("Read", {"file_path": "/r/ws/data.js"}, "permission denied is just text here")]
+        self.assertTrue(passes("not-permission-blocked", calls1=calls))
+
+    def test_an_edited_index_beats_a_refused_precondition(self):
+        label, cid, expect, override, _ = next(m for m in MORE_MUTATIONS if m[1] == "index-untouched")
+        self.assertEqual(checks.verdict(run(expect, **override)), "FAIL")
+
+    def test_a_missing_index_without_a_report_script_does_not_beat_the_environment(self):
+        self.assertEqual(checks.verdict(run("report", skills=(), calls1=[], report_found=False)), "INCONCLUSIVE")
+
+    def test_the_wrong_plugin_is_inconclusive(self):
+        for override in (dict(plugins=("sitrep", "sitrep")), dict(plugin_path="/installed/sitrep")):
+            self.assertEqual(checks.verdict(run("report", **override)), "INCONCLUSIVE", override)
+
+    def test_a_recording_without_the_plugin_path_skips_the_path_test(self):
+        row, events, states = helpers.good("report", plugin_path="/anywhere")
+        del states["plugin"]
+        self.assertTrue(checks.skill_loaded(checks.Case.build(row, events, states))[1])
+
+
+class Dependency(unittest.TestCase):
+    def test_the_direction_matters(self):
+        self.assertTrue(passes("dependency-recorded"))
+        self.assertFalse(passes("dependency-recorded", data=reversed_dependency()))
+
+    def test_a_cycle_does_not_count(self):
+        self.assertFalse(passes("dependency-recorded", data=with_items(db={"dependsOn": ["migration"]})))
+
+    def test_a_database_item_that_mentions_the_migration_is_still_a_database_item(self):
+        self.assertTrue(passes("dependency-recorded", data=with_items(db={"detail": "Postgres or SQLite; it unblocks the schema migration"})))
+
+    def test_titles_decide_before_details(self):
+        data = with_items(db={"title": "Postgres or SQLite?"}, migration={"title": "Schema migration blocked", "detail": "Waits for Postgres or SQLite."})
+        self.assertTrue(passes("dependency-recorded", data=data))
+
+
+class Coverage(unittest.TestCase):
+    def test_each_planted_item_needs_an_item_of_its_own(self):
+        self.assertFalse(passes("items-cover-planted", data=with_items(retention=None, sso={"detail": "Vendor choice. Retention is unclear too."})))
+        self.assertTrue(passes("items-cover-planted", data=with_items(sso={"detail": "Vendor choice. Retention is unclear too."})))
+
+    def test_one_item_that_mentions_two_topics_can_stand_for_only_one(self):
+        merged = with_items(migration=None, db={"detail": "Postgres or SQLite, and the schema migration that follows."})
+        self.assertFalse(passes("items-cover-planted", data=merged))
+
+    def test_an_item_matching_two_keys_is_assigned_to_the_free_one(self):
+        data = with_items(migration={"detail": "Scripts differ between Postgres and SQLite."})
+        self.assertTrue(passes("items-cover-planted", data=data))
+
+
+class Turns(unittest.TestCase):
+    def test_split_turns(self):
+        row, events, states = helpers.good("report-clean")
+        self.assertEqual(len(checks.split_turns(events)), 2)
+
+    def test_the_report_is_not_cleaned_when_it_was_never_located(self):
+        self.assertFalse(passes("report-cleaned", expect="report-clean", report_found=False))
+
+    def test_a_cleaned_report_needs_the_second_record(self):
+        row, events, states = helpers.good("report-clean")
+        states["report2"] = None
+        self.assertFalse(checks.report_cleaned(checks.Case.build(row, events, states))[1])
+
+
+if __name__ == "__main__":
+    unittest.main()

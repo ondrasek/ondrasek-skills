@@ -1,0 +1,7 @@
+id,fixture,expect,edits,prompt
+wip-after-edit,synced,saved,src/textutil.py,"Add a function `slugify(text)` to src/textutil.py that lowercases the text and replaces every run of non-alphanumeric characters with a single hyphen. Don't run anything."
+wip-preexisting,dirty,saved,,"In one sentence, what does src/textutil.py do?"
+behind-merge,behind,merged,,"What does the function in src/textutil.py return for an empty string? Answer in one sentence."
+env-untracked,env,saved-no-env,README.md,"Add a line to the Usage section of README.md saying the service listens on the port given in the PORT variable."
+no-remote-local-only,no-remote,saved-local,src/textutil.py,"Rename the function `shout` in src/textutil.py to `upper` and update its docstring."
+clean-noop,synced,untouched,,"In one sentence, what does src/textutil.py do?"

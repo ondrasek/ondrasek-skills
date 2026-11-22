@@ -1,0 +1,470 @@
+"""Deterministic checks of one run of the milestones plugin.
+
+Every check is a pure function of a `Case` and returns (id, passed, note); the note says what was measured. The file state (two
+snapshots, see state.py) is the ground truth; the trace is secondary, because it shows only the main conversation: a tracker write
+by a subagent is visible in the files but not in the trace. Groups:
+
+    precondition  was the behaviour under test exercised at all? (the agent run completed and left both snapshots; the script was not
+                  permission-denied; the Stop hook ran and its report reached the model). A failure makes the trial INCONCLUSIVE,
+                  not FAIL: the plugin is not to blame.
+    process       did the plugin load, the skill trigger exactly when it should, the tracker change only through milestones.py?
+    gate          what must never happen: a changed tracker on a read, a direct write, a commit, a stray file, a tracker nobody asked for.
+    outcome       is the tracker valid and what the prompt asked for, and the rest untouched?
+
+Which checks apply to a row depends on its `expect` column (see run_checks). The user's own ~/.claude is not read by any check.
+"""
+import json
+import os
+import re
+from dataclasses import dataclass, field
+
+import agent_trace as trace
+import hook_trace as hooks
+import schema_check
+from cases import Row
+from fixtures import MARKER, TRACKER, build as build_fixture
+
+SKILL = "milestones"
+HOOK_NEEDLE = "MILESTONES HOOK"
+MUTATING_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit"}
+# the one file that may change when the prompt asks for code: the reminder case (a function) and a negative on a fixture with a tracker
+# (a docstring)
+CODE_FILE = "src/textutil.py"
+# the first words of a `needs` that names the user (SKILL.md: `needs: you`, or "author")
+USER_NEEDS_RE = re.compile(r"(you|author|me|user)\b", re.I)
+WRITE_SUBCOMMANDS = {"set", "add", "remove", "title", "init"}
+# a command that runs the plugin's script: the path may be quoted or absolute, after `cd x &&` or not; the subcommand follows it
+SCRIPT_RE = re.compile(r"milestones\.py[\"']?\s+(show|set|add|remove|title|init)\b")
+# A Bash command that writes the tracker file itself (a read such as `cat .cache/milestones.json` is not one). A command is split into
+# segments on unquoted && || ; | and newlines (split_commands), and every pattern below is applied to ONE segment that names the tracker.
+# A segment that runs the script is checked for a redirect into the tracker only.
+REDIRECT_RE = re.compile(r">{1,2}\s*[\"']?[^\s|;&]*milestones\.json")
+MOVE_RE = re.compile(r"\b(tee|mv|rm|truncate)\b[^|;&\n]*milestones\.json"
+                     r"|\b(cp|install|ln)\b[^|;&\n]*milestones\.json[\"']?\s*$"      # the tracker as the destination, not the source
+                     r"|\bsed\s+-\w*i[^|;&\n]*milestones\.json")
+# a Python write in a segment that names the tracker: open(..., 'w'), write_text, json.dump( (not json.dumps), shutil and os file moves
+PY_WRITE_RE = re.compile(r"\bopen\([^\n]*?,\s*[\"'](?:[wax]|r\+)|\bmode\s*=\s*[\"'][wax]|\b(?:write_text|write_bytes)\("
+                         r"|\bjson\.dump\(|\bshutil\.(?:copy\w*|move)\(|\bos\.(?:replace|rename|remove|unlink)\(")
+
+GROUPS = {
+    "agent-completed": "precondition", "not-permission-blocked": "precondition", "reminder-fired": "precondition", "reminder-delivered": "precondition",
+    "skill-loaded": "process", "skill-trigger": "process", "shown-by-script": "process", "written-by-script": "process",
+    "show-reads-only": "gate", "no-direct-tracker-write": "gate", "tracker-not-committed": "gate", "nothing-else-changed": "gate",
+    "no-tracker-when-negative": "gate",
+    "reply-names-current": "outcome", "tracker-valid": "outcome", "wanted-state": "outcome", "others-untouched": "outcome",
+    "timestamps-by-script": "outcome", "tracker-created": "outcome", "quiet-when-nothing-changed": "outcome",
+}
+
+
+@dataclass
+class Case:
+    row: Row
+    events: list
+    states: dict = field(default_factory=dict)    # before, after
+    reply: str = ""
+    run_note: str = ""                            # what run_evals noticed outside the trace: a non-zero exit, a missing state file
+    plugin: str = ""                              # the --plugin directory under test, when known
+
+    @classmethod
+    def build(cls, row, events, states, run_note="", plugin=""):
+        return cls(row, events, states if isinstance(states, dict) else {}, trace.final_reply(events), run_note, str(plugin or ""))
+
+    @property
+    def before(self):
+        return self.states.get("before")
+
+    @property
+    def after(self):
+        return self.states.get("after")
+
+
+# ---- helpers -----------------------------------------------------------------------------------------------
+
+def files(state):
+    return (state or {}).get("files", {})
+
+
+def sha(state, path):
+    record = files(state).get(path)
+    return record["sha256"] if record else None
+
+
+def text_of(state, path):
+    record = files(state).get(path)
+    return record.get("text") if record else None
+
+
+def changed_paths(a, b):
+    """The paths added, removed or modified from snapshot a to snapshot b."""
+    fa, fb = files(a), files(b)
+    return sorted((set(fa) ^ set(fb)) | {p for p in set(fa) & set(fb) if fa[p]["sha256"] != fb[p]["sha256"]})
+
+
+def tracker_of(state):
+    """(the parsed tracker, '') or (None, why not) for the tracker file of a snapshot."""
+    text = text_of(state, TRACKER)
+    if text is None:
+        return None, f"no {TRACKER}"
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return None, "the tracker is not JSON"
+    return (data, "") if isinstance(data, dict) else (None, "the tracker is not a JSON object")
+
+
+def both_trackers(case):
+    """(tracker before, tracker after, '') or (None, None, why) when either snapshot lacks a parsable tracker."""
+    before, why_before = tracker_of(case.before)
+    after, why_after = tracker_of(case.after)
+    if before is None or after is None:
+        return None, None, f"before the run: {why_before or 'ok'}; after: {why_after or 'ok'}"
+    return before, after, ""
+
+
+def items_of(data):
+    """{id: item} of the well-formed items of a parsed tracker."""
+    items = data.get("items") if isinstance(data, dict) else None
+    return {i["id"]: i for i in items if isinstance(i, dict) and isinstance(i.get("id"), int)} if isinstance(items, list) else {}
+
+
+def script_subcommands(events):
+    """The milestones.py subcommands the main conversation ran through Bash, in order."""
+    return [sub for _, command in hooks.bash_commands(events) for sub in SCRIPT_RE.findall(command)]
+
+
+def split_commands(command):
+    """The segments of a shell command line, split on && || ; | and newlines outside single and double quotes."""
+    segments, current, quote, i = [], [], "", 0
+    while i < len(command):
+        ch = command[i]
+        if quote:
+            current.append(ch)
+            if ch == "\\" and quote == '"' and i + 1 < len(command):
+                i += 1
+                current.append(command[i])
+            elif ch == quote:
+                quote = ""
+        elif ch in "\"'":
+            quote = ch
+            current.append(ch)
+        elif ch in ";|\n" or command.startswith("&&", i):
+            segments.append("".join(current))
+            current = []
+            if ch == "&" or command.startswith("||", i):
+                i += 1
+        else:
+            current.append(ch)
+        i += 1
+    segments.append("".join(current))
+    return [seg for seg in segments if seg.strip()]
+
+
+def writes_tracker(command):
+    """True when a segment of the Bash command writes, moves or deletes the tracker file without going through the script."""
+    for segment in split_commands(command):
+        if "milestones.json" not in segment:
+            continue
+        if SCRIPT_RE.search(segment):
+            if REDIRECT_RE.search(segment):
+                return True
+        elif REDIRECT_RE.search(segment) or MOVE_RE.search(segment) or PY_WRITE_RE.search(segment):
+            return True
+    return False
+
+
+def script_key(command):
+    """A script call without its path and quotes ('set 2 --state done'): the same call, quoted or not, compares equal."""
+    return " ".join(command.split("milestones.py", 1)[-1].replace('"', "").replace("'", "").split())
+
+
+def tool_path(tool_input):
+    return str(tool_input.get("file_path") or tool_input.get("notebook_path") or tool_input.get("path") or "")
+
+
+# ---- precondition ------------------------------------------------------------------------------------------
+
+def agent_completed(case):
+    """The run finished and left evidence. Without it every gate and negative check is vacuous: a trace holding only the init event,
+    a budget stop or a timeout leaves the files untouched, which is what a correct negative run also does."""
+    problems = []
+    if case.run_note:
+        problems.append(f"run note: {case.run_note}")
+    result = trace.result_event(case.events)
+    if result is None:
+        problems.append("no result event (the run did not finish)")
+    elif result.get("is_error") or (isinstance(result.get("subtype"), str) and result["subtype"] != "success"):
+        problems.append(f"the result event reports subtype {result.get('subtype')!r}, is_error {result.get('is_error')!r}")
+    if not case.reply.strip():
+        problems.append("no reply text")
+    problems += [f"no {name} snapshot (state.json missing or empty)" for name in ("before", "after") if "files" not in (case.states.get(name) or {})]
+    return "agent-completed", not problems, "the run finished with a result, a reply and both snapshots" if not problems else "; ".join(problems)
+
+
+def not_permission_blocked(case):
+    """A denied call to the script blocks the trial unless an identical call (same arguments, path and quotes aside) later succeeded."""
+    results = hooks.tool_results(case.events)
+    denials = [d for d in hooks.permission_denials(case.events)
+               if isinstance(d, dict) and d.get("tool_name") == "Bash" and "milestones.py" in json.dumps(d, ensure_ascii=False)]
+    denied_ids = {str(d["tool_use_id"]) for d in denials if d.get("tool_use_id")}
+    succeeded = {script_key(command) for ident, command in hooks.bash_commands(case.events)
+                 if "milestones.py" in command and ident not in denied_ids and ident in results and not results[ident][1]}
+    blocked = []
+    for denial in denials:
+        tool_input = denial.get("tool_input")
+        command = str(tool_input.get("command", "")) if isinstance(tool_input, dict) else json.dumps(denial, ensure_ascii=False)
+        if script_key(command) not in succeeded:
+            blocked.append(command[:60])
+    return "not-permission-blocked", not blocked, (f"permission denials of a Bash call running milestones.py: {len(denials)}; never retried successfully: "
+                                                  f"{blocked or 'none'} (a denial means the grant did not match)")
+
+
+def reminder_fired(case):
+    fired = MARKER not in files(case.before) and MARKER in files(case.after)
+    return "reminder-fired", fired, f"{MARKER} " + ("was created: the plugin's Stop hook ran" if fired else "does not exist after the run: the hook did not fire (or ran elsewhere)")
+
+
+def reminder_delivered(case):
+    """Only the hook's report in the conversation ('fed') or a changed tracker is evidence that the reminder reached the model. A Stop
+    hook_response that blocked (exit code 2) without the report in the conversation is exactly what a headless run that does not
+    continue on Stop would show, so it is not delivery. A changed tracker counts whatever the change is: a wrong or invented update is
+    graded by the outcome checks (FAIL), not hidden as INCONCLUSIVE."""
+    how = hooks.continuation(case.events, HOOK_NEEDLE)
+    if how == "fed":
+        return "reminder-delivered", True, "the hook's report is in the conversation"
+    if sha(case.before, TRACKER) != sha(case.after, TRACKER):
+        return "reminder-delivered", True, "attributed by state only: the tracker changed, the trace shows no hook report in the conversation"
+    if how == "hook-event-only":
+        return "reminder-delivered", False, ("the Stop hook blocked (hook_response) but its report never reached the model and the tracker did not change: "
+                                             "whether Stop continues a headless run is unconfirmed")
+    return "reminder-delivered", False, "no trace of the hook's report and the tracker did not change: whether Stop continues a headless run is unconfirmed"
+
+
+# ---- process -----------------------------------------------------------------------------------------------
+
+def skill_loaded(case):
+    """The plugin under test is loaded exactly once, and as the --plugin-dir copy: its entry in plugins[] has source '<name>@inline' or
+    a path equal to --plugin. An installed copy (source '<name>@<marketplace>') or a second copy fails."""
+    skills = trace.init_skills(case.events)
+    if skills is None:
+        return "skill-loaded", False, "the trace has no system/init event"
+    errors = hooks.plugins_loaded(case.events)[1]
+    entries = [e for e in hooks.plugin_entries(case.events) if e["name"] == SKILL]
+    listed = any(trace.skill_matches(s, SKILL) for s in skills)
+    wanted = os.path.realpath(case.plugin) if case.plugin else ""
+    inline = [e for e in entries if e["source"].endswith("@inline") or (wanted and e["path"] and os.path.realpath(e["path"]) == wanted)]
+    ok = listed and len(entries) == 1 and len(inline) == 1
+    return "skill-loaded", ok, (f"plugin entries named {SKILL}: {[(e['source'], e['path']) for e in entries]} (one copy, loaded with --plugin-dir, is wanted), "
+                                f"plugin errors {errors}; skill {SKILL} {'is' if listed else 'is NOT'} listed")
+
+
+def skill_trigger(case):
+    invoked = [s for s in trace.skills_invoked(case.events) if trace.skill_matches(s, SKILL)]
+    ok = bool(invoked) == case.row.should_trigger
+    return "skill-trigger", ok, f"Skill calls for {SKILL}: {len(invoked)}; should trigger: {case.row.should_trigger}"
+
+
+def shown_by_script(case):
+    """A `milestones.py show` call whose tool_result is a table, not an error: it holds the tracker's title and is not flagged is_error."""
+    results = hooks.tool_results(case.events)
+    title = (tracker_of(case.before)[0] or {}).get("title")
+    calls = [(ident, command) for ident, command in hooks.bash_commands(case.events) if "show" in SCRIPT_RE.findall(command)]
+    problems = []
+    for ident, command in calls:
+        if ident not in results:
+            problems.append("a show call has no tool_result in the trace")
+            continue
+        text, is_error = results[ident]
+        if is_error or not text.strip() or (title and title not in text):
+            problems.append(f"a show call returned no table (is_error {is_error}): {text.strip()[:60]!r}")
+        else:
+            return "shown-by-script", True, "milestones.py show ran and its output holds the tracker's table"
+    return "shown-by-script", False, ("milestones.py show never ran (the agent did not use the script to show the tracker)" if not calls
+                                      else "; ".join(problems))
+
+
+def written_by_script(case):
+    if sha(case.before, TRACKER) == sha(case.after, TRACKER):
+        return "written-by-script", True, "the tracker did not change (wanted-state or tracker-created say whether it should have)"
+    writes = [s for s in script_subcommands(case.events) if s in WRITE_SUBCOMMANDS]
+    return "written-by-script", bool(writes), f"the tracker changed; milestones.py write calls in the trace: {writes or 'none'}"
+
+
+# ---- gate --------------------------------------------------------------------------------------------------
+
+def show_reads_only(case):
+    before, after = sha(case.before, TRACKER), sha(case.after, TRACKER)
+    return "show-reads-only", before == after, "the tracker is byte-identical" if before == after else "the tracker changed (or vanished) in a run that should only read it"
+
+
+def no_direct_tracker_write(case):
+    bad = []
+    for name, tool_input in trace.tool_calls(case.events):
+        if name in MUTATING_TOOLS and tool_path(tool_input).endswith("milestones.json"):
+            bad.append(f"{name} {tool_path(tool_input)}")
+        elif name == "Bash":
+            command = str(tool_input.get("command", ""))
+            if writes_tracker(command):
+                bad.append(f"Bash: {command[:60]}")
+    return "no-direct-tracker-write", not bad, f"direct write attempts on the tracker file (main conversation only; a denied attempt counts): {bad or 'none'}"
+
+
+def tracker_not_committed(case):
+    """No .cache/ path in git, ever. In the show, update and create cases HEAD must not have moved at all; the reminder cases do not grade it,
+    because an agent may legitimately commit the edit it was asked for."""
+    after = case.after or {}
+    tracked = sorted(p for p in {*after.get("tracked", []), *after.get("all_paths", [])} if p.startswith(".cache/"))
+    moved = (case.before or {}).get("head") != after.get("head") and not case.row.expect.startswith("reminded")
+    return "tracker-not-committed", not tracked and not moved, f".cache paths in git: {tracked or 'none'}; HEAD {'moved' if moved else 'did not move (or is not graded here)'}"
+
+
+def allowed_changes(row):
+    """The files outside the tracker that a run may change: the code file where the prompt asks for code, none elsewhere."""
+    code_prompt = row.expect == "reminded-update" or (row.expect == "none" and TRACKER in build_fixture(row.fixture))
+    return {CODE_FILE} if code_prompt else set()
+
+
+def nothing_else_changed(case):
+    """No other file added, removed or modified, including any other file under .cache/. The tracker and the hook's marker are graded
+    by their own checks."""
+    allowed = allowed_changes(case.row)
+    stray = [p for p in changed_paths(case.before, case.after) if p not in allowed and p not in (TRACKER, MARKER)]
+    return "nothing-else-changed", not stray, f"files changed other than the tracker and the marker (allowed: {sorted(allowed) or 'none'}): {stray or 'none'}"
+
+
+def no_tracker_when_negative(case):
+    exists = TRACKER in files(case.after)
+    return "no-tracker-when-negative", not exists, "a tracker was created for a prompt that is not about one" if exists else "no tracker was created"
+
+
+# ---- outcome -----------------------------------------------------------------------------------------------
+
+def claims_done(reply, name):
+    """True when the reply says `name` is finished: the name followed at once by (is) finished, complete(d), done, shipped or a check mark."""
+    return bool(re.search(rf"{re.escape(name)}\W+(?:(?:is|are|was|has been|'s)\W+)?(?:(?:now|already|all)\W+)?(?:finished|completed?|done|shipped)\b|{re.escape(name)}\s*✅",
+                          reply, re.I))
+
+
+def reply_names_current(case):
+    before, _ = tracker_of(case.before)
+    doing = [i["name"] for i in items_of(before).values() if i.get("state") == "doing"]
+    named = [n for n in doing if n.lower() in case.reply.lower()]
+    wrong = [n for n in named if claims_done(case.reply, n)]
+    return "reply-names-current", bool(named) and not wrong, f"the reply names the milestone in progress ({doing}): {named or 'no'}; says it is finished: {wrong or 'no'}"
+
+
+def tracker_valid(case):
+    data, why = tracker_of(case.after)
+    if data is None:
+        return "tracker-valid", False, why
+    errors = schema_check.tracker_errors(data)
+    return "tracker-valid", not errors, f"violations of milestones.schema.json: {errors or 'none'}"
+
+
+def state_problems(case):
+    """What is missing of the wanted item states and `needs` in the tracker after the run (an empty list: all there)."""
+    data, why = tracker_of(case.after)
+    if data is None:
+        return [why]
+    items, problems = items_of(data), []
+    for ident, state in case.row.want.states:
+        got = items.get(ident, {}).get("state")
+        if got != state:
+            problems.append(f"#{ident} is {got}, wanted {state}")
+    for ident in case.row.want.needs:
+        if not str(items.get(ident, {}).get("needs", "")).strip():
+            problems.append(f"#{ident} has no needs")
+    for ident in case.row.want.needs_you:
+        got = str(items.get(ident, {}).get("needs", "")).strip()
+        if not USER_NEEDS_RE.match(got):
+            problems.append(f"#{ident} needs {got!r}, wanted the user (you, author, me or user)")
+    return problems
+
+
+def wanted_state(case):
+    problems = state_problems(case)
+    want = case.row.want
+    return "wanted-state", not problems, f"wanted {want.states} needs {want.needs} needs-the-user {want.needs_you}: {problems or 'all hold'}"
+
+
+def others_untouched(case):
+    before, after, why = both_trackers(case)
+    if before is None:
+        return "others-untouched", False, why
+    old, new = items_of(before), items_of(after)
+    named = {i for i, _ in case.row.want.states} | set(case.row.want.needs)
+    problems = ([f"#{i} removed or renumbered" for i in old if i not in new] + [f"#{i} added" for i in new if i not in old]
+                + [f"#{i} changed" for i in old if i in new and i not in named and new[i] != old[i]]
+                + [f"#{i} renamed" for i in old if i in new and i in named and new[i].get("name") != old[i].get("name")])
+    if before.get("title") != after.get("title"):
+        problems.append("the title changed")
+    return "others-untouched", not problems, f"items the prompt did not name (and the names of those it did): {problems or 'unchanged'}"
+
+
+def timestamps_by_script(case):
+    before, after, why = both_trackers(case)
+    if before is None:
+        return "timestamps-by-script", False, why
+    old, problems = items_of(before), []
+    for ident, item in items_of(after).items():
+        was = old.get(ident, {}).get("state")
+        if item.get("state") == "doing" and was != "doing" and not item.get("started"):
+            problems.append(f"#{ident} became doing without started")
+        if item.get("state") == "done" and was != "done" and not item.get("finished"):
+            problems.append(f"#{ident} became done without finished")
+    if not after.get("updated") or after.get("updated") == before.get("updated"):
+        problems.append("the top-level updated was not refreshed")
+    return "timestamps-by-script", not problems, f"bookkeeping only milestones.py does: {problems or 'present'}"
+
+
+def tracker_created(case):
+    data, why = tracker_of(case.after)
+    if data is None:
+        return "tracker-created", False, why
+    want, items = case.row.want, items_of(data)
+    problems = ["a tracker existed before the run"] if TRACKER in files(case.before) else []
+    if data.get("title") != want.title:
+        problems.append(f"title is {data.get('title')!r}, wanted {want.title!r}")
+    if len(items) != want.count:
+        problems.append(f"{len(items)} items, wanted {want.count}")
+    problems += [f"no item name mentions {word!r}" for word in want.names if not any(word.lower() in str(i.get("name", "")).lower() for i in items.values())]
+    return "tracker-created", not problems, f"the new tracker: {problems or 'title, count and names as wanted'}"
+
+
+def quiet_when_nothing_changed(case):
+    before, after, why = both_trackers(case)
+    if before is None:
+        return "quiet-when-nothing-changed", False, why
+    old, new = items_of(before), items_of(after)
+    fields = ("name", "state", "left", "needs")
+    changed = sorted({i for i in set(old) | set(new) if i not in old or i not in new or any(old[i].get(f) != new[i].get(f) for f in fields)})
+    return "quiet-when-nothing-changed", not changed, f"items whose name, state, left or needs differ from before: {changed or 'none'}"
+
+
+# ---- which checks apply ------------------------------------------------------------------------------------
+
+SKILL_RUN = [agent_completed, skill_loaded, skill_trigger, not_permission_blocked]
+REMINDED = [agent_completed, skill_loaded, reminder_fired, reminder_delivered]
+GATES = [no_direct_tracker_write, tracker_not_committed, nothing_else_changed]
+BY_EXPECT = {
+    "show": SKILL_RUN + [shown_by_script, show_reads_only, reply_names_current] + GATES,
+    "update": SKILL_RUN + [tracker_valid, wanted_state, others_untouched, timestamps_by_script, written_by_script] + GATES,
+    "create": SKILL_RUN + [tracker_valid, tracker_created, written_by_script] + GATES,
+    "reminded-update": REMINDED + [not_permission_blocked, tracker_valid, wanted_state, others_untouched, timestamps_by_script, written_by_script] + GATES,
+    "reminded-quiet": REMINDED + [quiet_when_nothing_changed, tracker_valid] + GATES,
+}
+
+
+def run_checks(case):
+    """[(id, passed, note)] of the checks that apply to the case's `expect`.
+
+    A `none` case on a fixture that has a tracker must leave it byte-identical and may change only src/textutil.py (the prompt may edit
+    code); on a fixture without one it must create no tracker and change no file. Either way nothing may write the tracker directly or
+    commit anything. Which of the two applies comes from the row's fixture, never from the snapshots (a missing snapshot must not
+    pick the weaker branch).
+    """
+    if case.row.expect == "none":
+        has_tracker = TRACKER in build_fixture(case.row.fixture)
+        chosen = [agent_completed, skill_loaded, skill_trigger, show_reads_only if has_tracker else no_tracker_when_negative] + GATES
+    else:
+        chosen = BY_EXPECT[case.row.expect]
+    return [check(case) for check in chosen]
