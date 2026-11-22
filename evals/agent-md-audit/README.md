@@ -2,7 +2,7 @@
 
 Run the skill on fixed prompts in throwaway repositories and grade what it did. The files are the ground truth: the skill promises to change nothing until the user approves, and a transcript can only claim that, so every run snapshots the workspace.
 
-**Status: the offline part is verified, the real run is not.** The unit tests (52) exercise the checks on invented traces and the runner against a stub agent. Nobody has yet run `make eval` against a live `claude`, so the regex checks may need loosening after the first real trace.
+**Status: verified offline and by a first real run of every case.** The unit tests (52) exercise the checks on invented traces and the runner against a stub agent. Real run (2026-11-22, Claude Code 2.1.330, outside the sandbox, 1 trial per case): **all 8 cases PASS** (`explicit-defects`, `implicit-defects`, `gate-fix-now`, `apply-defects`, `clean-file`, `negative-unit-test`, `negative-explain`, `negative-create`), 69 of 69 checks, about $1.1 in total (`explicit-defects` $0.19, the three-case batch with `apply-defects` $0.62, `clean-file` and the negatives $0.28). That run showed that the skill researches before reading, proposes without touching any file, and in the apply turn fixes CLAUDE.md, leaves AGENTS.md alone and commits nothing. Each case has had one trial: flakiness is unmeasured. Run real trials **outside the Claude Code Bash sandbox** (inside it Claude Code cannot save sessions, so the apply turn's `--resume` fails).
 
 ## Why not `claude plugin eval`
 
@@ -46,10 +46,10 @@ python3 evals/agent-md-audit/python/run_evals.py --fixtures DIR        # grade r
 
 ## A real run
 
-- **Cost:** model calls and web fetches on your own account; not measured yet. Every audit fetches two documentation pages, and `apply-defects` is two turns. The suite is 8 cases, 5 of them audits. Start with one case, `--trials 1`; the result events report the cost.
+- **Cost:** model calls and web fetches on your own account, about $1.1 for the 8 cases once (see Status). Every audit fetches two documentation pages, and `apply-defects` is two turns. Start with one case, `--trials 1`; the result events report the cost.
 - **Isolation:** `--setting-sources project,local` keeps your user settings, hooks and plugins out. The skill still reads `~/.claude/CLAUDE.md` for context, so `artifacts/` (traces and snapshots, git-ignored) can contain its contents: review before sharing.
-- **Permissions:** Edit and Write are granted on purpose, so that a violation can happen and be measured. The granted Bash commands are read-only. Whether a headless run denies an ungranted tool or stops is not confirmed; set `--agent-cmd` if your Claude Code differs.
-- **First thing to check when a real run fails:** the outcome checks read only the final result text of turn 1. If the model spreads the proposal over several messages, they fail although the behavior is fine; loosen the checks, not the skill.
+- **Permissions:** Edit and Write are granted on purpose, so that a violation can happen and be measured. The granted Bash commands are read-only. No ungranted Bash command was attempted in the real run, so how the harness reports a denial is still unconfirmed here (the newer harnesses under `evals/` saw `dontAsk` deny an ungranted command and the agent carry on); set `--agent-cmd` if your Claude Code differs.
+- **First thing to check when a real run fails** (all 8 cases passed on the first real run, so this is a caution, not an observed failure): the outcome checks read only the final result text of turn 1. If the model spreads the proposal over several messages, they fail although the behavior is fine; loosen the checks, not the skill.
 - **Timeout:** 600 s per call; a dry run of an audit took about 2 minutes.
 
 ## Provenance

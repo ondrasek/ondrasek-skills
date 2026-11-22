@@ -4,6 +4,8 @@ How do you know that `oaat` still works after you edit `plugins/oaat/skills/oaat
 
 It was developed as a teaching sample for the course PA015 (Masaryk University) and replicated here, pointed at the live plugin instead of a bundled copy. The record of the first real runs (sections "The first real run" to "Isolating the run") is from that sample, where the plugin was bundled as `skill/`.
 
+**After the move of the trace reader and command runner to `evals/_common` (2026-11-22, Claude Code 2.1.330, outside the sandbox): one real run of all 11 prompts, 1 trial each: 11 of 11 PASS, 132 of 132 checks, $0.44 (the two-turn follow-up rows now use the shared last-result-event cost).**
+
 `oaat` presents exactly one item in a fixed shape and waits for the answer:
 
 ```
