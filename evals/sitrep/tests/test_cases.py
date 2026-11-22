@@ -62,7 +62,9 @@ class RealTable(unittest.TestCase):
         by_id = {r.id: r for r in self.rows}
         self.assertIn("docs/open-questions.md", by_id["explicit-report"].prompt)
         self.assertNotIn("docs/open-questions.md", by_id["implicit-big-picture"].prompt)
-        self.assertNotIn("open-questions", by_id["with-milestones"].prompt)
+        # with-milestones names the file on purpose: with the vague prompt the agent anchored on the tracker and never opened the file in
+        # 4 of 5 real trials, which tests discovery, not the milestone integration this case is for (see the README)
+        self.assertIn("docs/open-questions.md", by_id["with-milestones"].prompt)
 
 
 class Validation(unittest.TestCase):
