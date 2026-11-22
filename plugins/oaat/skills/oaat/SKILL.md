@@ -21,16 +21,16 @@ Put items that block other items or work first, then by impact if left unaddress
 
 ## 3. Present one item
 
-**If the `AskUserQuestion` tool is in your tool list, use it** (do not search for it). Make exactly one call with exactly one question: never batch several items. If the tool is not in your list, or the call is denied or fails (headless runs, subagents), use the text template below, without mentioning why.
+**If the `AskUserQuestion` tool is available to you (in your tool list, or listed as a deferred tool you can load), use it.** If it is not listed, do not go searching for it. Make one call with one question per item, and make the next call only after the answer to this one has come back: never batch several items. If the tool is not in your list, or the call is denied or fails (headless runs, subagents), use the text template below, without mentioning why.
 
 The tool call, for one item:
 
-- `header`: the item type in one or two words, at most 12 characters (for example `Decision`, `Question`, `Risk`).
+- `header`: the item type in at most 12 characters. Use `Decision`, `Question`, `Risk`, `Clarify`, `Open Q`, `Assumption` or `Concern`; shorten any other type the same way.
 - `question`: `Item N of M, type: Title.`, then what it is and why it matters in two short sentences, then one concrete question that is the only question mark.
 - `options`: the item's one to three choices. Each has a short `label` (a few words) and a `description` with its trade-off in one line. Put the recommended option first and end its label with `(Recommended)`; the reason for it goes in its description. Add a last option labelled `Skip for now`, described as `Park this item and move on.` That makes two to four options in total.
 - `multiSelect`: `false`.
 
-Then **stop and wait**. Write no other text in that message (the one-line count before the first item is the only exception).
+Then **stop and wait** for the answer, which comes back to you as the result of the call. Write no other text around a call, with two exceptions: the one-line count before the first item, and one plain line (a confirmation, an explanation or a correction, see below) before the next call. Never list the other items, not even in that line.
 
 ### Text template (no tool)
 
@@ -57,7 +57,7 @@ Then **stop and wait**. Say nothing about other items, do not preview what is ne
 
 ## 4. Handle the reply
 
-- With the tool, the answer arrives as the chosen label. An option is the answer; `Skip for now` is a skip; text typed into the free-text field ("Other") is read like any reply below (an answer of its own, "stop", a question, a tangent).
+- With the tool, the answer comes back inside the same turn, as the chosen label. An option is the answer; `Skip for now` is a skip; text typed into the free-text field ("Other") is read like any reply below (an answer of its own, "stop", a question, a tangent). Carry on in that turn: one plain line, then the next call (or, after a question or a disagreement, the same item's call again).
 - Answer given: confirm it in one line, apply or record it, and move to the next item. Do not reopen a settled item unless new information contradicts it.
 - The answered item came from a milestone: record the answer through the `milestones` skill in the same turn, silently (for example clear `needs`, set `blocked` to `doing`, or update `left`). If that plugin is not installed, skip this and do not mention it.
 - User asks for more detail: explain just that, still on the same item, then repeat the question.
@@ -70,7 +70,7 @@ Then **stop and wait**. Say nothing about other items, do not preview what is ne
   This may be a tangent from X. Continue or refocus?
   ```
 
-  Add nothing else: no item header, no repeat of the item, no second question. This line is the one question of the reply. If the user says "refocus", show the current item again in the template; if "continue", follow the tangent first and return to the item afterwards.
+  Add nothing else: no item header, no repeat of the item, no second question. This line is the one question of the reply. If the user says "refocus", present the current item again (with the tool, or in the template); if "continue", follow the tangent first and return to the item afterwards.
 - New items found while discussing: add them to the queue silently; do not interrupt.
 
 ## 5. Wrap up
