@@ -14,6 +14,7 @@ STUB_MODE (environment), the case is picked by EVAL_PROMPT_ID:
     no-hook          never sees a report and does nothing: the behaviour under test is not exercised
     rewrites-remote  as good, then moves origin's main to an unrelated commit with update-ref inside the bare repository,
                      so that the remote history is rewritten without any git command in the trace
+    plain-message    as good, but the commit message is "update files" without a trailer: the advisory commit-message check warns
     touches-clean    makes an empty commit even when nothing is unsaved
     crash            prints the init event and dies with exit code 1 before doing anything (auth failure, budget cap at the first call)
     exit-3           as good, but exits with code 3 after printing a complete trace
@@ -68,7 +69,8 @@ elif unsaved and mode not in ("no-hook", "no-commit"):
     add = paths if mode in ("commits-env", "drops-env-commit") else [p for p in paths if not checks.is_env(p)]
     if add:
         git("add", "--", *add)
-        git("commit", "-q", "-m", "chore: snapshot work in progress", "-m", helpers.TRAILER)
+        git(*(["commit", "-q", "-m", "update files"] if mode == "plain-message" else
+              ["commit", "-q", "-m", "chore: snapshot work in progress", "-m", helpers.TRAILER]))
         if mode == "drops-env-commit":
             git("reset", "-q", "--soft", "HEAD~1")
             git("reset", "-q", "--", ".env")

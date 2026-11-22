@@ -2,7 +2,7 @@
 own report.sh in the TMPDIR it was given, writes data.js there, and in turn 2 cleans the report up.
 
 STUB_MODE (environment): good (default) | no-report | writes-into-project | bad-data | edits-index | misses-items | rm-instead-of-clean |
-leaves-report | exits-nonzero (a good run whose process exits 3) | crash (prints init, exits 1). The runner passes EVAL_PROMPT_ID (n*: negative, f*: feedback, m*: with milestones, else a plain report), EVAL_TURN and
+leaves-report | pastes-list (a good run whose reply pastes the item list: advisory warning only) | exits-nonzero (a good run whose process exits 3) | crash (prints init, exits 1). The runner passes EVAL_PROMPT_ID (n*: negative, f*: feedback, m*: with milestones, else a plain report), EVAL_TURN and
 TMPDIR; the plugin directory comes from `--plugin-dir`. Every other argument is input the stub ignores.
 """
 import json
@@ -64,7 +64,10 @@ if turn == "1":
         if mode == "writes-into-project":
             Path("sitrep.html").write_text("<html></html>\n", encoding="utf-8")
             events += helpers.tool_events("Write", {"file_path": "sitrep.html", "content": "<html></html>"})
-        events.append(helpers.result(helpers.GOOD_REPLY.replace(helpers.DIR, directory)))
+        reply = helpers.GOOD_REPLY.replace(helpers.DIR, directory)
+        if mode == "pastes-list":     # the five planted items pasted into chat: only the advisory reply check minds
+            reply += "\n" + "\n".join(f"- {t}" for t in ("Pick the database", "SSO vendor", "Font licences", "Data retention", "Schema migration"))
+        events.append(helpers.result(reply))
 elif not reports():
     events.append(helpers.result("There is no report to clean."))
 elif mode == "rm-instead-of-clean":

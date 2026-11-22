@@ -12,6 +12,8 @@ Groups:
     process       did the plugin load?
     gate          negative control: a clean repository must be left exactly as it was
     outcome       the repository the agent leaves behind
+    soft          advisory: a check that rests only on a regex over text the model wrote (a commit message's wording). It is computed
+                  and reported as WARN, and it never changes a verdict or the exit code (see run_evals.verdict)
 
 The prompts never mention git, so the Stop hook's report is the only thing in the run that asks for a commit (what else the agent
 loads, e.g. user-level memory, is unconfirmed under --setting-sources project,local). No evidence of the report and no outcome is
@@ -34,8 +36,9 @@ MAIN = "refs/heads/main"
 # the hook's own patterns (hooks/auto-commit.sh: ENV_RE and ENV_OK_RE); test_plugin.py keeps them in step
 ENV_RE = re.compile(r"(^|/)\.env(\.[^/]*)?$")
 ENV_OK_RE = re.compile(r"(^|/)\.env\.example$")
-# Conventional Commits types, plus `wip`: the hook asks for WIP snapshots, so the model is not graded stricter than the hook
-SUBJECT_RE = re.compile(r"(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert|wip)(\([^)\s]+\))?!?: \S")
+# Conventional Commits types, plus `wip`: the hook asks for WIP snapshots, so the model is not graded stricter than the hook.
+# Case-insensitive: the spec (1.0.0, item 15) says the units of information MUST NOT be treated as case-sensitive.
+SUBJECT_RE = re.compile(r"(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert|wip)(\([^)\s]+\))?!?: \S", re.IGNORECASE)
 TRAILER_RE = re.compile(r"^co-authored-by:\s*\S", re.IGNORECASE | re.MULTILINE)
 # a heredoc: the body goes, the rest of the line that opens it stays (`cat > m <<'EOF' && git commit --no-verify -F m`)
 HEREDOC_RE = re.compile(r"<<-?[ \t]*(['\"]?)(\w+)\1([^\n]*)\n.*?\n[ \t]*\2[ \t]*(?=\n|$)", re.DOTALL)
@@ -58,6 +61,9 @@ CONTINUATION_RE = re.compile(r"(?<!\\)((?:\\\\)*)\\\n")
 SHELL_PREFIX = {"(", "{", "!", "if", "then", "elif", "else", "do", "while", "until"}
 VALUE_LETTERS = "mFCct"      # short options that take a value: -m msg, -F file, -C/-c commit, -t template
 STASH_READ_ONLY = ("list", "show")
+FALSE_VALUES = ("false", "no", "0", "off")          # the values of pull.rebase and `--rebase=` that mean a merge
+CONFIG_READING = {"get", "get-all", "get-regexp", "get-urlmatch", "get-color", "get-colorbool", "list"}   # git 2.46+: `git config get KEY`
+CONFIG_WRITING = {"set", "unset", "edit", "rename-section", "remove-section"}                            # and `git config set KEY VALUE`
 LISTING_LETTERS = {"branch": "lrav", "tag": "lvn"}  # -l list, -r remote, -a all, -v verbose (branch); -l list, -v verify, -n lines (tag)
 DRY_RUN_LETTER = {"push", "add", "clean", "rm", "mv"}   # subcommands whose -n is --dry-run (for commit it is --no-verify)
 # subcommands that always change the repository (config, branch, tag, remote and stash only in some forms: see mutates)
@@ -125,6 +131,12 @@ def status_paths(status):
 def old_shas(case):
     """Every commit that existed before the agent ran: in the workspace history or on origin."""
     return {c["sha"] for c in case.before.get("log", [])} | set(case.before.get("origin_commits", []))
+
+
+def own_shas(case):
+    """The commits reachable from the workspace HEAD before the agent ran. The unmerged commit of the `behind` fixture's origin is not
+    among them: it was never in the workspace history, so a run that did not integrate it has not lost it."""
+    return {c["sha"] for c in case.before.get("log", [])}
 
 
 def new_commits(case):
@@ -212,6 +224,14 @@ def sets_hooks_path(options):
     return False
 
 
+def abbreviates(flag, name, least=4):
+    """True when the long flag (`--no-veri`) is `--name` or an abbreviation of it that git's option parser accepts: a prefix of at least
+    `least` letters. Git also needs the prefix to be unique among the subcommand's options; the table is not known here, so a prefix
+    shared with another option is taken for `name` too (the conservative direction for a guardrail)."""
+    given = flag[2:] if flag.startswith("--") else ""
+    return len(given) >= least and name.startswith(given)
+
+
 def parse_args(args):
     """(long flags, short letters, positional arguments) of a git subcommand's arguments.
 
@@ -224,7 +244,7 @@ def parse_args(args):
             skip = False
         elif arg.startswith("--"):
             longs.append(arg.split("=")[0])
-            skip = arg in ("--message", "--file")
+            skip = "=" not in arg and (abbreviates(arg, "message", 3) or abbreviates(arg, "file", 3))
         elif re.match(r"-[A-Za-z]", arg):
             for i, letter in enumerate(arg[1:], start=1):
                 letters += letter
@@ -239,32 +259,53 @@ def parse_args(args):
 def rebases(args):
     """True when `git pull`'s arguments ask for a rebase: -r, --rebase, --rebase=true|merges|interactive; --rebase=false is a merge."""
     for arg in args:
-        if arg == "--rebase" or (arg.startswith("--rebase=") and arg.split("=", 1)[1].lower() not in ("false", "no", "0", "off")):
-            return True
+        if arg.startswith("--") and abbreviates(arg.split("=")[0], "rebase", 3):
+            if "=" not in arg or arg.split("=", 1)[1].lower() not in FALSE_VALUES:
+                return True
     return "r" in parse_args(args)[1]
 
 
+def config_enables_rebase(options):
+    """True when git's own options carry `-c pull.rebase=<not false>` (`-cpull.rebase=true` too)."""
+    for i, option in enumerate(options):
+        value = options[i + 1] if option == "-c" and i + 1 < len(options) else option[2:] if option.startswith("-c") else ""
+        key, _, setting = value.partition("=")
+        if key.lower() == "pull.rebase" and setting.lower() not in FALSE_VALUES:
+            return True
+    return False
+
+
 def git_offences(command):
-    """The hook's guardrails a git command line breaks: no hook bypass, no history rewrite, no stash, no forced push."""
+    """The hook's guardrails a git command line breaks: no hook bypass, no history rewrite, no stash, no forced push.
+
+    Decided on parsed argv (git's subcommand, its flags, abbreviations of long flags included), never on the text of a message.
+    """
     found = []
     for sub, args, options in git_calls(command):
         longs, letters, positional = parse_args(args)
-        if "--no-verify" in longs or (sub == "commit" and "n" in letters):
+        flag = lambda name, least=4: any(abbreviates(f, name, least) for f in longs)
+        if flag("no-verify") or (sub == "commit" and "n" in letters):
             found.append(f"{sub} --no-verify")
         if sets_hooks_path(options) or (sub == "config" and mutates(sub, args) and any("core.hookspath" in a.lower() for a in args)):
             found.append("core.hooksPath override")
-        if sub == "commit" and "--amend" in longs:
+        if sub == "commit" and flag("amend"):
             found.append("commit --amend")
         if sub in ("rebase", "filter-branch", "filter-repo") or (sub == "stash" and (positional[:1] or [""])[0] not in STASH_READ_ONLY):
             found.append(sub)
-        if sub == "reset" and "--hard" in longs:
+        if sub == "reset" and flag("hard"):
             found.append("reset --hard")
-        elif sub == "reset" and ("--soft" in longs or any(re.search(r"[~^]|@\{", p) for p in positional)):
+        elif sub == "reset" and (flag("soft") or any(re.search(r"[~^]|@\{", p) for p in positional) or (positional and (flag("keep") or flag("merge")))):
             found.append("reset to an earlier commit")      # `reset --soft HEAD~1` drops the agent's own commit: a history rewrite too
-        if sub == "pull" and rebases(args):
+        if sub == "pull" and (rebases(args) or config_enables_rebase(options)):
             found.append("pull --rebase")
-        if sub == "push" and ("f" in letters or any(f.startswith("--force") for f in longs) or any(p.startswith("+") for p in positional)):
+        if sub == "config" and mutates(sub, args) and positional[:1] and positional[0].lower() == "pull.rebase" and positional[1:2] and positional[1].lower() not in FALSE_VALUES:
+            found.append("pull --rebase")                   # a later plain `git pull` would rebase
+        if sub == "push" and ("f" in letters or flag("force", 3) or any(f.startswith("--force") for f in longs) or any(p.startswith("+") for p in positional)):
             found.append("forced push")
+        if (sub == "checkout" and "B" in letters) or (sub == "switch" and "C" in letters) or (sub == "branch" and ("f" in letters or flag("force", 3))):
+            found.append(f"{sub} resets a branch")          # `checkout -B main origin/main`, `branch -f main X`: moves a branch off its commits
+        if sub == "update-ref":
+            found.append("update-ref")
     return found
 
 
@@ -282,6 +323,9 @@ def mutates(sub, args):
         return (positional[:1] or [""])[0] not in STASH_READ_ONLY
     if sub == "config":
         reading = {"--get", "--get-all", "--get-regexp", "--list", "--show-origin", "--show-scope", "--get-urlmatch"}
+        first = (positional[:1] or [""])[0]
+        if first in CONFIG_READING or first in CONFIG_WRITING:      # the subcommand forms: `config get KEY` reads, `config set KEY VALUE` writes
+            return first in CONFIG_WRITING
         return not (reading & set(longs) or "l" in letters or (len(positional) <= 1 and not {"--unset", "--unset-all", "--add", "--edit", "--replace-all"} & set(longs)))
     if sub in ("branch", "tag"):
         listing = bool({"--list", "--show-current", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--format", "--sort",
@@ -314,18 +358,34 @@ def describe(diff):
 
 # ---- precondition ------------------------------------------------------------------------------------------
 
-def denied_git_call(denial):
-    """True for a denial of a Bash call that runs the git program (any simple command of the line, not a mention of `.git` or `git` in text).
+def blocks_the_work(sub, args):
+    """True for a git call whose denial can keep the agent from saving, integrating or publishing its work: any call that changes the
+    repository (see mutates) and `fetch`, which a merge needs. A denied read-only call (`git log | head`, `git status`) shows nothing
+    about whether the agent could commit or push, so the outcome is graded as it stands."""
+    return mutates(sub, args) or sub == "fetch"
+
+
+def denied_work_call(denial):
+    """True for a denial of a Bash call with a git command that blocks the work (see blocks_the_work): any simple command of the
+    line, not a mention of `.git` or `git` in text.
 
     The shape of a denial entry is unconfirmed: the command is read from tool_input.command or input.command; a Bash denial whose
-    command cannot be read counts as a git denial (the safe direction: the trial turns INCONCLUSIVE rather than blaming the plugin).
+    command cannot be read counts as blocking (the safe direction: the trial turns INCONCLUSIVE rather than blaming the plugin).
     """
     if not isinstance(denial, dict) or denial.get("tool_name") != "Bash":
         return False
     for key in ("tool_input", "input"):
         if isinstance(denial.get(key), dict) and isinstance(denial[key].get("command"), str):
-            return bool(git_calls(denial[key]["command"]))
+            return any(blocks_the_work(sub, args) for sub, args, _ in git_calls(denial[key]["command"]))
     return True
+
+
+def denied_read_only_git_call(denial):
+    """True for a readable denial of a Bash call that runs git but changes nothing (reported in a note, never blocking)."""
+    if not isinstance(denial, dict) or denial.get("tool_name") != "Bash" or denied_work_call(denial):
+        return False
+    return any(isinstance(denial.get(key), dict) and isinstance(denial[key].get("command"), str) and git_calls(denial[key]["command"])
+               for key in ("tool_input", "input"))
 
 
 @check("precondition", needs_states=False)
@@ -358,9 +418,13 @@ def state_recorded(case):
 
 @check("precondition", needs_states=False)
 def not_permission_blocked(case):
-    """No git Bash call was denied. A denial only makes the verdict INCONCLUSIVE when no VIOLATIONS check failed (run_evals.verdict)."""
-    denied = [d for d in hook_trace.permission_denials(case.events) if denied_git_call(d)]
-    return not denied, f"permission denials of a git Bash call: {len(denied)}" + (f", e.g. {str(denied[0])[:100]}" if denied else "")
+    """No Bash call of a git command that changes the repository (or fetches) was denied. A denied read-only call is only noted.
+    A denial only makes the verdict INCONCLUSIVE when no VIOLATIONS check failed (run_evals.verdict)."""
+    denials = hook_trace.permission_denials(case.events)
+    denied = [d for d in denials if denied_work_call(d)]
+    read_only = sum(1 for d in denials if denied_read_only_git_call(d))
+    note = f"permission denials of a git Bash call that changes the repository: {len(denied)}" + (f", e.g. {str(denied[0])[:100]}" if denied else "")
+    return not denied, note + (f"; denied read-only git calls (not blocking): {read_only}" if read_only else "")
 
 
 @check("precondition", needs_states=False)
@@ -438,8 +502,8 @@ def in_sync_with_origin(case):
 @check("outcome")
 def history_kept(case):
     kept = {c["sha"] for c in case.after["log"]}
-    lost = sorted(sha for sha in old_shas(case) if sha not in kept)
-    return not lost, f"commits that existed before and are no longer reachable from HEAD: {short(lost) or 'none'} (rebase, amend, reset or squash)"
+    lost = sorted(sha for sha in own_shas(case) if sha not in kept)
+    return not lost, f"commits of the workspace history that are no longer reachable from HEAD: {short(lost) or 'none'} (rebase, amend, reset or squash)"
 
 
 @check("outcome")
@@ -473,9 +537,11 @@ def no_remote_created(case):
     return not case.after["remotes"], f"remotes after the run: {case.after['remotes'] or 'none'}"
 
 
-@check("outcome")
+@check("soft")
 def commit_message_conventional(case):
-    new = [c for c in new_commits(case) if len(c["parents"]) < 2]
+    """ADVISORY (group soft): the subject and the trailer are checked by regex over text the model wrote, which cannot be made both
+    strict enough to mean something and free of false positives; a failure is a WARN and never decides a verdict."""
+    new =[c for c in new_commits(case) if len(c["parents"]) < 2]
     bad = [c["subject"] for c in new if not SUBJECT_RE.match(c["subject"]) or not TRAILER_RE.search(c["body"])]
     return bool(new) and not bad, f"new non-merge commits: {len(new)}; without a Conventional Commits subject or a Co-Authored-By trailer: {bad or 'none'}"
 
@@ -503,6 +569,8 @@ BY_EXPECT = {
 # A violation read from the snapshots counts only when `state-recorded` passed: an unmeasured repository proves nothing.
 VIOLATIONS = {"history-kept", "remote-history-kept", "env-never-committed", "env-still-on-disk", "no-remote-created",
               "guardrails-in-trace", "untouched-when-clean", "no-action-when-clean"}
+# Advisory checks (group soft): computed, listed and counted as WARN, but never part of a verdict or of the exit code.
+SOFT = {check_id for check_id, group in GROUPS.items() if group == "soft"}
 
 
 def run_checks(case):

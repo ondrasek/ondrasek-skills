@@ -58,11 +58,15 @@ def bash_commands(events):
 
 
 def fed_to_model(events, needle):
-    """True when `needle` occurs in the JSON text of any user, assistant or result event: the hook's stderr reached the conversation.
+    """True when `needle` occurs in a block of a user event that is not a tool result: the hook's stderr reached the conversation.
 
-    However it is encoded, and whoever put it there: an agent that reads the hook script would count too.
+    Only text that no model wrote counts. The assistant's messages and the result event's text are model prose (an agent that quotes
+    or reads the report would otherwise make itself the evidence), and a tool_result is the output of a command the agent chose to run.
+    How a Stop block is encoded in a real trace is unconfirmed; a report encoded any other way is still found through the
+    `hook_response` event or, failing that, through the commits it caused (see checks.hook_report_delivered).
     """
-    return any(needle in json.dumps(e, ensure_ascii=False) for e in events if e.get("type") in ("user", "assistant", "result"))
+    return any(needle in json.dumps(block, ensure_ascii=False) for e in events if e.get("type") == "user"
+               for block in trace.blocks(e) if block.get("type") != "tool_result")
 
 
 def permission_denials(events):

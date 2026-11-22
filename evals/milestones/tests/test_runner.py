@@ -31,7 +31,7 @@ MODES = {
     "hand-edit": ("update", "FAIL", {"no-direct-tracker-write", "written-by-script", "timestamps-by-script"}),
     "wrong-item": ("update", "FAIL", {"wanted-state", "others-untouched"}),
     "commits-tracker": ("update", "FAIL", {"tracker-not-committed"}),
-    "invents-update": ("reminded-quiet", "FAIL", {"quiet-when-nothing-changed"}),
+    "invents-update": ("reminded-quiet", "FAIL", {"quiet-when-nothing-changed", "no-write-attempt"}),
     "ignores-reminder": ("reminded-update", "FAIL", {"wanted-state", "timestamps-by-script"}),
     "no-marker": ("reminded-update", "INCONCLUSIVE", {"reminder-fired", "reminder-delivered", "wanted-state", "timestamps-by-script"}),
     # a negative run that started and then did nothing passes every other check of a none case: only agent-completed can tell
@@ -77,6 +77,17 @@ class Runner(unittest.TestCase):
                 self.assertEqual(self.results()[case]["trials"][0]["verdict"], verdict, report)
                 self.assertEqual(self.failed(case), failed, report)
 
+    def test_a_wrong_reply_is_a_warning_not_a_failure(self):
+        code, report = self.run_main("--only", "show", mode="wrong-reply")
+        self.assertEqual(code, 0, report)
+        self.assertEqual(self.results()["show"]["trials"][0]["verdict"], "PASS")
+        self.assertEqual(self.results()["show"]["trials"][0]["warnings"], ["reply-names-current"])
+        self.assertRegex(report, r"show\s+show\s+1/1\s+PASS\s+-\s+reply-names-current")
+        self.assertIn("warnings (advisory", report)
+        self.assertIn("WARN 1 advisory checks in 1 trials", report)
+        self.assertIn("soft 0/1", report)
+        self.assertIn("cases passed 1/1", report)
+
     def test_a_mode_breaks_only_its_own_case(self):
         code, report = self.run_main(mode="hand-edit")
         self.assertEqual(code, 1, report)
@@ -117,7 +128,7 @@ class Runner(unittest.TestCase):
 
     def test_a_recording_without_its_state_file_is_inconclusive_not_a_pass(self):
         # M2: states = {} would compare None with None in every state check
-        self.run_main("--only", "update", mode="hand-edit")
+        self.run_main("--only", "update")
         (self.out / "update.state.json").unlink()
         out = io.StringIO()
         code = run_evals.main(["--cases", str(self.csv), "--only", "update", "--fixtures", str(self.out)], out)
@@ -128,6 +139,14 @@ class Runner(unittest.TestCase):
         out = io.StringIO()
         self.assertEqual(run_evals.main(["--cases", str(self.csv), "--only", "update", "--fixtures", str(self.out)], out), 1)
         self.assertIn("INCONCLUSIVE", out.getvalue())
+
+    def test_a_trace_fact_still_fails_when_the_state_file_is_missing(self):
+        # the Write of the tracker is in the trace whatever the snapshots say: not explained by the missing state
+        self.run_main("--only", "update", mode="hand-edit")
+        (self.out / "update.state.json").unlink()
+        out = io.StringIO()
+        self.assertEqual(run_evals.main(["--cases", str(self.csv), "--only", "update", "--fixtures", str(self.out)], out), 1)
+        self.assertRegex(out.getvalue(), r"update\s+update\s+0/1\s+FAIL")
 
     def test_a_failed_run_stays_inconclusive_when_regraded_offline(self):
         self.run_main("--only", "none", mode="crash")
@@ -194,12 +213,25 @@ class Verdict(unittest.TestCase):
         self.assertEqual(run_evals.verdict(self.results("wanted-state", "show-reads-only")), "FAIL")
         self.assertEqual(run_evals.verdict(self.results("reminder-fired")), "INCONCLUSIVE")
 
-    def test_a_failed_precondition_outranks_a_failed_check(self):
-        self.assertEqual(run_evals.verdict(self.results("not-permission-blocked", "no-direct-tracker-write", "tracker-valid")), "INCONCLUSIVE")
+    def test_a_failed_precondition_masks_only_what_it_explains(self):
+        # the denial explains the missing outcome, not the agent's own direct write or a changed file
+        self.assertEqual(run_evals.verdict(self.results("not-permission-blocked", "wanted-state", "tracker-valid")), "INCONCLUSIVE")
+        self.assertEqual(run_evals.verdict(self.results("not-permission-blocked", "no-direct-tracker-write", "tracker-valid")), "FAIL")
+        self.assertEqual(run_evals.verdict(self.results("reminder-fired", "no-direct-tracker-write", "written-by-script", "timestamps-by-script")), "FAIL")
+        self.assertEqual(run_evals.verdict(self.results("agent-completed", "nothing-else-changed")), "FAIL")
+        self.assertEqual(run_evals.verdict(self.results("agent-completed", "skill-trigger", "wanted-state")), "INCONCLUSIVE")
 
-    def test_every_precondition_check_makes_a_trial_inconclusive_and_nothing_else_does(self):
+    def test_every_check_alone_gives_its_group_verdict(self):
         for cid, group in checks.GROUPS.items():
-            self.assertEqual(run_evals.verdict(self.results(cid)), "INCONCLUSIVE" if group == "precondition" else "FAIL", cid)
+            want = {"precondition": "INCONCLUSIVE", "soft": "PASS"}.get(group, "FAIL")
+            self.assertEqual(run_evals.verdict(self.results(cid)), want, cid)
+
+    def test_a_warn_only_trial_is_a_pass_and_never_changes_a_verdict(self):
+        soft = [cid for cid, group in checks.GROUPS.items() if group == "soft"]
+        self.assertEqual(run_evals.verdict(self.results(*soft)), "PASS")
+        self.assertEqual(run_evals.verdict(self.results(*soft, "wanted-state")), "FAIL")
+        self.assertEqual(run_evals.verdict(self.results(*soft, "reminder-fired")), "INCONCLUSIVE")
+        self.assertEqual(run_evals.warnings_of(self.results(*soft, "wanted-state")), soft)
 
     def test_a_case_is_as_bad_as_its_worst_trial(self):
         trial = lambda v: {"verdict": v}  # noqa: E731

@@ -12,8 +12,10 @@ directory is removed afterwards unless --keep is given.
 
 A trial is PASS, FAIL or INCONCLUSIVE: INCONCLUSIVE when a precondition check failed (the behaviour was never exercised: the run did
 not complete, a snapshot is missing, the script was permission-denied, the Stop hook did not run or its report did not reach the
-model), FAIL when any other check failed.
-The exit code is 0 when every trial passes, 1 when a trial fails or is inconclusive, 2 when a run cannot start.
+model) and every other failed check is explained by one of those (checks.EXPLAINED_BY), FAIL when a check failed that no failed
+precondition explains. Checks of the `soft` group (they rest only on the model's prose) are advisory: a failed one is a WARN, listed
+and counted in the report, and never changes the verdict or the exit code.
+The exit code is 0 when every trial passes (with or without warnings), 1 when a trial fails or is inconclusive, 2 when a run cannot start.
 """
 import argparse
 import json
@@ -32,7 +34,7 @@ HERE = Path(__file__).resolve().parent
 UNIT = HERE.parent
 REPO = UNIT.parents[1]
 PLUGIN = REPO / "plugins" / "milestones"
-GROUP_ORDER = ("precondition", "process", "gate", "outcome")
+GROUP_ORDER = ("precondition", "process", "gate", "outcome", "soft")
 # Read-only tools, the script, and Edit/Write plus git add/commit: those four are granted on purpose, so that a direct tracker write or a
 # commit of the tracker can happen and be measured. Whether this pattern matches the quoted absolute script path is unconfirmed;
 # a denial is reported as INCONCLUSIVE (not-permission-blocked).
@@ -98,11 +100,22 @@ def run_agent(row, trial, args):
 
 
 def verdict(results):
-    """INCONCLUSIVE when a precondition check failed, else FAIL when any check failed, else PASS."""
-    failed = [r["id"] for r in results if not r["pass"]]
-    if any(checks.GROUPS[cid] == "precondition" for cid in failed):
-        return "INCONCLUSIVE"
-    return "FAIL" if failed else "PASS"
+    """PASS, FAIL or INCONCLUSIVE from the hard checks; the `soft` group (prose heuristics) is ignored.
+
+    No hard check failed: PASS. A precondition failed: INCONCLUSIVE, unless a failed hard check is explained by none of the failed
+    preconditions (checks.EXPLAINED_BY): that one is the agent's own doing, so FAIL. Otherwise (hard checks failed, no precondition): FAIL."""
+    failed = [r["id"] for r in results if not r["pass"] and checks.GROUPS[r["id"]] != "soft"]
+    pre = [cid for cid in failed if checks.GROUPS[cid] == "precondition"]
+    hard = [cid for cid in failed if checks.GROUPS[cid] != "precondition"]
+    if not pre:
+        return "FAIL" if hard else "PASS"
+    explained = set().union(*(checks.EXPLAINED_BY.get(cid, set()) for cid in pre))
+    return "FAIL" if any(cid not in explained for cid in hard) else "INCONCLUSIVE"
+
+
+def warnings_of(trial_or_checks):
+    """The ids of the failed soft checks (WARN) of a trial's check results."""
+    return [c["id"] for c in trial_or_checks if not c["pass"] and checks.GROUPS[c["id"]] == "soft"]
 
 
 def grade_trial(row, events, states, note="", plugin=""):
@@ -112,7 +125,7 @@ def grade_trial(row, events, states, note="", plugin=""):
     results = [{"id": cid, "pass": ok, "notes": note} for cid, ok, note in checks.run_checks(case)]
     result = trace.result_event(events) or {}
     # the cost of the LAST result event: agent_trace.stats() sums every result event, and a resumed or continued session reports the whole
-    return {"verdict": verdict(results), "checks": results, "turns": result.get("num_turns"), "cost": result.get("total_cost_usd"),
+    return {"verdict": verdict(results), "warnings": warnings_of(results), "checks": results, "turns": result.get("num_turns"), "cost": result.get("total_cost_usd"),
             "duration_ms": result.get("duration_ms")}
 
 
@@ -153,27 +166,41 @@ def prompt_verdict(prompt):
 
 
 def failed_ids(prompt):
+    """The ids of the failed hard checks over the trials (soft checks are warn_ids)."""
     ids = []
     for t in prompt["trials"]:
-        ids += [c["id"] for c in t["checks"] if not c["pass"] and c["id"] not in ids]
+        ids += [c["id"] for c in t["checks"] if not c["pass"] and checks.GROUPS[c["id"]] != "soft" and c["id"] not in ids]
+    return ids
+
+
+def warn_ids(prompt):
+    ids = []
+    for t in prompt["trials"]:
+        ids += [i for i in warnings_of(t["checks"]) if i not in ids]
     return ids
 
 
 def format_report(results):
     """The per-case table, the failures, the per-group counts and the summary line, as a list of lines."""
     w = max([len(p["id"]) for p in results["prompts"]] + [2]) + 2
-    lines = [f"{'id':<{w}}{'expect':<17}{'trials':<8}{'result':<14}failed checks"]
+    wf = max([len(", ".join(failed_ids(p)) or "-") for p in results["prompts"]] + [len("failed checks")]) + 2
+    lines = [f"{'id':<{w}}{'expect':<17}{'trials':<8}{'result':<14}{'failed checks':<{wf}}WARN (advisory)"]
     for p in results["prompts"]:
         passed, total = count(p)
-        lines.append(f"{p['id']:<{w}}{p['expect']:<17}{f'{passed}/{total}':<8}{prompt_verdict(p):<14}{', '.join(failed_ids(p)) or '-'}")
+        lines.append(f"{p['id']:<{w}}{p['expect']:<17}{f'{passed}/{total}':<8}{prompt_verdict(p):<14}{', '.join(failed_ids(p)) or '-':<{wf}}{', '.join(warn_ids(p)) or '-'}")
     problems = []
     for p in results["prompts"]:
         for t in p["trials"]:
             if t["run_note"]:
                 problems.append(f"  {p['id']} trial {t['trial']}: {t['run_note']}")
-            problems += [f"  {p['id']} trial {t['trial']}: {c['id']}: {c['notes']}" for c in t["checks"] if not c["pass"]]
+            problems += [f"  {p['id']} trial {t['trial']}: {c['id']}: {c['notes']}" for c in t["checks"]
+                         if not c["pass"] and checks.GROUPS[c["id"]] != "soft"]
     if problems:
         lines += ["", "failures:"] + problems
+    warned = [f"  {p['id']} trial {t['trial']}: {c['id']}: {c['notes']}" for p in results["prompts"] for t in p["trials"] for c in t["checks"]
+              if not c["pass"] and checks.GROUPS[c["id"]] == "soft"]
+    if warned:
+        lines += ["", "warnings (advisory: they rest on the model's prose and never change a verdict or the exit code):"] + warned
     groups = {}
     for p in results["prompts"]:
         for t in p["trials"]:
@@ -189,7 +216,8 @@ def format_report(results):
     prompts_ok = sum(1 for p in results["prompts"] if prompt_verdict(p) == "PASS")
     rate = 100 * verdicts.count("PASS") // len(trials) if trials else 0
     lines.append(f"summary: cases passed {prompts_ok}/{len(results['prompts'])} (every trial), trials passed {verdicts.count('PASS')}/{len(trials)}, "
-                 f"failed {verdicts.count('FAIL')}, inconclusive {verdicts.count('INCONCLUSIVE')}, pass rate {rate}%")
+                 f"failed {verdicts.count('FAIL')}, inconclusive {verdicts.count('INCONCLUSIVE')}, pass rate {rate}%, "
+                 f"WARN {sum(len(warnings_of(t['checks'])) for t in trials)} advisory checks in {sum(1 for t in trials if warnings_of(t['checks']))} trials")
     return lines
 
 

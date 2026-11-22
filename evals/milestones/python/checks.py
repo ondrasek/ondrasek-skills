@@ -8,14 +8,20 @@ by a subagent is visible in the files but not in the trace. Groups:
                   the plugin leaked in beside the one under test; the script was not permission-denied; the Stop hook ran and its
                   report reached the model). A failure makes the trial INCONCLUSIVE, not FAIL: the plugin is not to blame.
     process       did the plugin load, the skill trigger exactly when it should, the tracker change only through milestones.py?
-    gate          what must never happen: a changed tracker on a read, a direct write, a commit, a stray file, a tracker nobody asked for.
+    gate          what must never happen: a changed tracker on a read, a direct write, a write attempt on a read or a quiet run, a commit,
+                  a stray file, a tracker nobody asked for.
     outcome       is the tracker valid and what the prompt asked for, and the rest untouched?
+    soft          ADVISORY (WARN): checks that rest only on parsing the model's own prose (its reply). They are computed and listed with
+                  their note, but never change the verdict or the exit code: regexes over free text can be neither non-evadable nor free
+                  of false positives, so they may not by themselves fail a trial. Everything else is decided by the workspace and git
+                  state or by structured trace facts (tool name, command argv, exit status).
 
 Which checks apply to a row depends on its `expect` column (see run_checks). The user's own ~/.claude is not read by any check.
 """
 import json
 import os
 import re
+import shlex
 from dataclasses import dataclass, field
 
 import agent_trace as trace
@@ -30,34 +36,41 @@ MUTATING_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit"}
 # the one file that may change when the prompt asks for code: the reminder case (a function) and a negative on a fixture with a tracker
 # (a docstring)
 CODE_FILE = "src/textutil.py"
-# the first words of a `needs` that names the user (SKILL.md: `needs: you`, or "author")
-USER_NEEDS_RE = re.compile(r"(you|author|me|user)\b", re.I)
+# the values of `needs` that set the statusline's "needs you" flag: the plugin's own milestones.is_you() takes exactly (case-insensitive)
+# "you" or "author" (and the author's own name forms, which the fixture does not use). "me", "user" or "you (the key from legal)" do not.
+USER_NEEDS = {"you", "author"}
 WRITE_SUBCOMMANDS = {"set", "add", "remove", "title", "init"}
-# a command that runs the plugin's script: the path may be quoted or absolute, after `cd x &&` or not; the subcommand follows it
-SCRIPT_RE = re.compile(r"milestones\.py[\"']?\s+(show|set|add|remove|title|init)\b")
+SCRIPT_SUBCOMMANDS = WRITE_SUBCOMMANDS | {"show"}
+PYTHON_RE = re.compile(r"python[\d.]*$")
 # A Bash command that writes the tracker file itself (a read such as `cat .cache/milestones.json` is not one). A command is split into
 # segments on unquoted && || ; | and newlines (split_commands), and every pattern below is applied to ONE segment that names the tracker.
 # A segment that runs the script is checked for a redirect into the tracker only.
 # the end of the tracker's file name: `milestones.json.bak` or `milestones.json~` is another file
 TRACKER_FILE = r"milestones\.json(?![\w~]|\.\w)"
 REDIRECT_RE = re.compile(rf">{{1,2}}\s*[\"']?[^\s|;&]*{TRACKER_FILE}")
-MOVE_RE = re.compile(rf"\b(tee|mv|rm|truncate)\b[^|;&\n]*{TRACKER_FILE}"
+MOVE_RE = re.compile(rf"\b(tee|mv|rm|truncate|sponge)\b[^|;&\n]*{TRACKER_FILE}"
                      rf"|\b(cp|install|ln)\b[^|;&\n]*{TRACKER_FILE}[\"']?\s*$"      # the tracker as the destination, not the source
-                     rf"|\bsed\s+-\w*i[^|;&\n]*{TRACKER_FILE}")
+                     rf"|\bsed\b[^|;&\n]*\s(?:-\w*i|--in-place)[^|;&\n]*{TRACKER_FILE}"
+                     rf"|\bperl\b[^|;&\n]*\s-(?![MmIdDC])[A-Za-z]*i[A-Za-z]*(?=[\s.=])[^|;&\n]*{TRACKER_FILE}"   # perl -pi -e ... / -i.bak
+                     rf"|\bawk\b[^|;&\n]*-i\s*inplace[^|;&\n]*{TRACKER_FILE}"
+                     rf"|\bdd\b[^|;&\n]*\bof=[\"']?\S*{TRACKER_FILE}")
+# `git rm --cached .cache/milestones.json` only drops the path from the index: the file is not written
+GIT_RM_CACHED_RE = re.compile(r"\bgit\b[^|;&\n]*\brm\b[^|;&\n]*--cached\b")
 # a Python write in a segment that names the tracker: open(..., 'w') (the mode must be a string inside the open( call itself, one level of
 # nested parentheses allowed, so that a later string argument of print() or json.load() is not a mode), mode='w', write_text, json.dump(
-# (not json.dumps), shutil and os file moves
+# (not json.dumps, and not json.dump(x, sys.stdout), which prints; a file opened for writing in the same call is caught by its open( mode), shutil and os file moves
 PY_MODE = r"[\"'](?:[wax][bt]?\+?|r[bt]?\+|r\+[bt]?)[\"']"
-PY_WRITE_RE = re.compile(rf"\bopen\((?:(?:[^()\n]|\([^()\n]*\))*,)?\s*{PY_MODE}|\bmode\s*=\s*{PY_MODE}|\b(?:write_text|write_bytes)\("
-                         r"|\bjson\.dump\(|\bshutil\.(?:copy\w*|move)\(|\bos\.(?:replace|rename|remove|unlink)\(")
+_ARGS = r"(?:[^()\n]|\([^()\n]*\))*"      # the arguments of open( up to its mode: one level of nested parentheses
+PY_WRITE_RE = re.compile(rf"\bopen\((?:{_ARGS},)?\s*{PY_MODE}|\bmode\s*=\s*{PY_MODE}|\b(?:write_text|write_bytes)\("
+                         rf"|\bjson\.dump\((?![^\n]*,\s*sys\.std(?:out|err)\s*[,)])|\bshutil\.(?:copy\w*|move)\(|\bos\.(?:replace|rename|remove|unlink)\(")
 
 GROUPS = {
     "agent-completed": "precondition", "plugin-under-test-isolated": "precondition", "not-permission-blocked": "precondition",
     "reminder-fired": "precondition", "reminder-delivered": "precondition",
     "skill-loaded": "process", "skill-trigger": "process", "shown-by-script": "process", "written-by-script": "process",
     "show-reads-only": "gate", "no-direct-tracker-write": "gate", "tracker-not-committed": "gate", "nothing-else-changed": "gate",
-    "no-tracker-when-negative": "gate",
-    "reply-names-current": "outcome", "tracker-valid": "outcome", "wanted-state": "outcome", "others-untouched": "outcome",
+    "no-tracker-when-negative": "gate", "no-write-attempt": "gate",
+    "reply-names-current": "soft", "tracker-valid": "outcome", "wanted-state": "outcome", "others-untouched": "outcome",
     "timestamps-by-script": "outcome", "tracker-created": "outcome", "quiet-when-nothing-changed": "outcome",
 }
 
@@ -133,9 +146,43 @@ def items_of(data):
     return {i["id"]: i for i in items if isinstance(i, dict) and isinstance(i.get("id"), int)} if isinstance(items, list) else {}
 
 
+def script_tokens(segment):
+    """The argv from the script path on, or [] when the segment is not a call of the plugin's script: its command word (after env
+    assignments, `env`, `command`, `exec`, `time`, `nohup`) is a Python interpreter (`python3`, `python3.12`) and a later token, before a
+    -c or -m option, is a path whose last component is milestones.py (`echo python3 milestones.py set` and `grep milestones.py x` are
+    not calls). One level only: a call wrapped in `bash -c '...'` is not seen (README, Limits)."""
+    try:
+        tokens = shlex.split(segment, comments=True)
+    except ValueError:
+        tokens = segment.split()
+    start = 0
+    while start < len(tokens) and (re.match(r"[A-Za-z_]\w*=", tokens[start]) or tokens[start] in ("env", "command", "exec", "time", "nohup")):
+        start += 1
+    if start >= len(tokens) or not PYTHON_RE.match(os.path.basename(tokens[start])):
+        return []
+    for i in range(start + 1, len(tokens)):
+        if tokens[i] in ("-c", "-m"):
+            return []
+        if os.path.basename(tokens[i]) == "milestones.py":
+            return tokens[i:]
+    return []
+
+
+def script_invocations(command):
+    """The milestones.py subcommands (show, set, add, remove, title, init) that a Bash command line runs, from its parsed argv: a text that
+    merely mentions the script (an echo, a grep pattern, a python -c string) is not a call."""
+    found = []
+    for segment in split_commands(command):
+        for token in script_tokens(segment)[1:4]:
+            if token in SCRIPT_SUBCOMMANDS:
+                found.append(token)
+                break
+    return found
+
+
 def script_subcommands(events):
     """The milestones.py subcommands the main conversation ran through Bash, in order."""
-    return [sub for _, command in hooks.bash_commands(events) for sub in SCRIPT_RE.findall(command)]
+    return [sub for _, command in hooks.bash_commands(events) for sub in script_invocations(command)]
 
 
 def split_commands(command):
@@ -170,9 +217,11 @@ def writes_tracker(command):
     for segment in split_commands(command):
         if "milestones.json" not in segment:
             continue
-        if SCRIPT_RE.search(segment):
+        if script_tokens(segment):
             if REDIRECT_RE.search(segment):
                 return True
+        elif GIT_RM_CACHED_RE.search(segment):
+            continue
         elif REDIRECT_RE.search(segment) or MOVE_RE.search(segment) or PY_WRITE_RE.search(segment):
             return True
     return False
@@ -217,36 +266,47 @@ def looks_denied(text):
 def not_permission_blocked(case):
     """A denied call to the script blocks the trial unless an identical call (same arguments, path and quotes aside) later succeeded.
 
-    A call counts as a successful retry only when its tool_result has no is_error and does not read like a denial, and, for a denial that
-    carries no tool_use_id (its call cannot be told from its retry), only when there are MORE such successful-looking calls with that key
-    than denials of it: a denial whose own tool_result lacks is_error must not clear itself.
+    A call to the script counts as DENIED when (a) an element of `permission_denials` (or a system permission_denied event) carries its
+    tool_use_id, whatever else it carries, or (b) its own tool_result is flagged is_error and reads like a denial. A denial element with
+    no usable tool_use_id is matched to a (b) call with the same arguments when there is one; an element left over is matched by its
+    tool_input (or its whole text) alone. A denied call is cleared only by a later call with the same arguments whose tool_result has
+    no is_error and does not read like a denial; for a leftover element the successful-looking calls must outnumber the leftovers, so
+    that a denial whose own tool_result lacks is_error cannot clear itself. All shapes are UNCONFIRMED: this degrades toward
+    INCONCLUSIVE, never toward a silent pass.
     """
     results = hooks.tool_results(case.events)
     calls = [(ident, command) for ident, command in hooks.bash_commands(case.events) if "milestones.py" in command]
     call_ids = {ident for ident, _ in calls}
-    denials = [d for d in hooks.permission_denials(case.events)
-               if isinstance(d, dict) and d.get("tool_name") == "Bash" and "milestones.py" in json.dumps(d, ensure_ascii=False)]
-    denied_ids = {str(d["tool_use_id"]) for d in denials if str(d.get("tool_use_id") or "") in call_ids}
-    unidentified = [d for d in denials if str(d.get("tool_use_id") or "") not in call_ids]
+    elements = [d for d in hooks.permission_denials(case.events) if isinstance(d, dict) and d.get("tool_name") in (None, "Bash")]
+    by_id = {str(d["tool_use_id"]) for d in elements if str(d.get("tool_use_id") or "") in call_ids}
+    from_result = {ident for ident, _ in calls if ident not in by_id and ident in results and results[ident][1] and looks_denied(results[ident][0])}
+    denied_ids = by_id | from_result
+    commands = dict(calls)
 
-    def key_of(denial):
+    def command_of(denial):
         tool_input = denial.get("tool_input")
-        command = str(tool_input.get("command", "")) if isinstance(tool_input, dict) else json.dumps(denial, ensure_ascii=False)
-        return command, script_key(command)
+        return str(tool_input.get("command", "")) if isinstance(tool_input, dict) and tool_input.get("command") else json.dumps(denial, ensure_ascii=False)
 
+    leftovers = [command_of(d) for d in elements if str(d.get("tool_use_id") or "") not in call_ids and "milestones.py" in json.dumps(d, ensure_ascii=False)]
+    consumed = {}
+    for ident in sorted(from_result):                       # a (b) call is the very denial that an unidentified element reports
+        key = script_key(commands[ident])
+        consumed[key] = consumed.get(key, 0) + 1
+    owed = {}
+    for command in leftovers:
+        key = script_key(command)
+        if consumed.get(key, 0) > 0:
+            consumed[key] -= 1
+        else:
+            owed[key] = owed.get(key, 0) + 1
     succeeded = {}
     for ident, command in calls:
         if ident not in denied_ids and ident in results and not results[ident][1] and not looks_denied(results[ident][0]):
             succeeded[script_key(command)] = succeeded.get(script_key(command), 0) + 1
-    owed = {}
-    for denial in unidentified:
-        owed[key_of(denial)[1]] = owed.get(key_of(denial)[1], 0) + 1
-    blocked = []
-    for denial in denials:
-        command, key = key_of(denial)
-        if succeeded.get(key, 0) <= owed.get(key, 0):
-            blocked.append(command[:60])
-    return "not-permission-blocked", not blocked, (f"permission denials of a Bash call running milestones.py: {len(denials)}; never retried successfully: "
+    blocked = [commands[i][:60] for i in sorted(denied_ids) if succeeded.get(script_key(commands[i]), 0) < 1]
+    blocked += [c[:60] for c in leftovers if succeeded.get(script_key(c), 0) <= owed.get(script_key(c), 0) and owed.get(script_key(c), 0) > 0]
+    blocked = list(dict.fromkeys(blocked))
+    return "not-permission-blocked", not blocked, (f"denied calls to milestones.py: {len(denied_ids) + sum(owed.values())}; never retried successfully: "
                                                   f"{blocked or 'none'} (a denial means the grant did not match)")
 
 
@@ -315,7 +375,7 @@ def shown_by_script(case):
     """A `milestones.py show` call whose tool_result is a table, not an error: it holds the tracker's title and is not flagged is_error."""
     results = hooks.tool_results(case.events)
     title = (tracker_of(case.before)[0] or {}).get("title")
-    calls = [(ident, command) for ident, command in hooks.bash_commands(case.events) if "show" in SCRIPT_RE.findall(command)]
+    calls = [(ident, command) for ident, command in hooks.bash_commands(case.events) if "show" in script_invocations(command)]
     problems = []
     for ident, command in calls:
         if ident not in results:
@@ -356,6 +416,14 @@ def no_direct_tracker_write(case):
     return "no-direct-tracker-write", not bad, f"direct write attempts on the tracker file (main conversation only; a denied attempt counts): {bad or 'none'}"
 
 
+def no_write_attempt(case):
+    """No milestones.py write subcommand (set, add, remove, title, init) in the trace, whatever came of it. In the read, quiet and negative
+    cases the tracker may not be written at all: a denied call or one the script refused leaves the tracker as it was, so the state alone
+    cannot tell that the agent tried. Parsed argv of the main conversation's Bash calls; a subagent's calls are not in the trace."""
+    writes = [sub for sub in script_subcommands(case.events) if sub in WRITE_SUBCOMMANDS]
+    return "no-write-attempt", not writes, f"milestones.py write calls in the trace (a denied or refused attempt counts): {writes or 'none'}"
+
+
 def tracker_not_committed(case):
     """No .cache/ path in git, ever. In the show, update and create cases HEAD must not have moved at all; the reminder cases do not grade it,
     because an agent may legitimately commit the edit it was asked for."""
@@ -386,22 +454,36 @@ def no_tracker_when_negative(case):
 
 # ---- outcome -----------------------------------------------------------------------------------------------
 
-# What may stand between a milestone's name and "finished": whitespace, a copula (with an adverb), one colon, dash, arrow, bar or opening
-# parenthesis. Sentence punctuation (. ; ,) may not: "In progress: Storage layer. Completed 1/4" is not a claim that it is finished.
-_JOIN = r"(?:\s+|\s*(?:'s|\s(?:is|are|was|has been|had been))\s*|\s*[:\-\u2013\u2014\u2192|(]\s*)"
-_ADVERB = r"(?:(?:now|already|all|officially|fully|just)\s+)*"
-_VERB = r"(?:finished|completed?|done|shipped)"
-# and the verb must END the claim: "done so far", "completed tables", "done 1/4" are partial, "done." "done," "done and" are not
-_END = r"(?=\s*(?:$|[.,;:!?)\]|\u2014\u2013-]|\u2705)|\s+(?:and|but|then)\b)"
+# What may stand between a milestone's name and "finished": blanks (no newline: the next line is another item), a copula (with an adverb), one
+# colon, dash, arrow, bar or opening parenthesis. Sentence punctuation (. ; ,) may not: "In progress: Storage layer. Completed 1/4" is
+# not a claim that it is finished.
+_JOIN = r"(?:[ \t]+|[ \t]*(?:'s|[ \t](?:is|are|was|has|has been|had been|have been))[ \t]*|[ \t]*[:\-\u2013\u2014\u2192|(][ \t]*)"
+_ADVERB = r"(?:(?:now|already|all|officially|fully|just)[ \t]+)*"
+_VERB = r"(?:finished|completed?|done|shipped|wrapped up)"
+# and the verb must END the claim, on its own line: "done so far", "completed tables", "done 1/4" are partial, "done." "done," "done and"
+# are not, and "Done:" is a label of the next item
+_END = r"(?=[ \t]*(?:$|[.,;!?)\]|\u2014\u2013-]|\u2705)|[ \t]+(?:and|but|then)\b)"
+# the clause before a match: a subordinator or negation there ("once/after Storage layer is done", "have not finished the Storage layer")
+# means the reply does not say it is finished now
+_HEDGE = re.compile(r"\b(?:once|after|until|when|before|if|unless|while|as soon as|not|never|yet|n't)\b|n't", re.I)
+# a verb before the name: "we finished the Storage layer", "completed Storage layer", "done with the Storage layer"
+_VERB_FIRST = r"(?:finished|completed?|shipped|wrapped up|done with)[ \t]+(?:the[ \t]+|with[ \t]+)?"
+
+
+def _clause_before(text, start):
+    return re.split(r"[.;!?\n]", text[:start])[-1]
 
 
 def claims_done(reply, name):
-    """True when the reply says `name` is finished: the name, then (is) finished, complete(d), done or shipped as the end of the clause,
-    or the name followed by a check mark. Markdown emphasis is ignored. A heuristic with known limits (README): a verb before the name
-    ("we finished the storage layer") and a hedge after it ("done, apart from ...") are not read."""
+    """True when the reply says `name` is finished: the name, then (is, has) finished, complete(d), done or shipped as the end of the
+    line or clause, or the name followed by a check mark (also after a colon), or a verb finished/completed/shipped right before the
+    name. Markdown emphasis is ignored. A match in a clause with once, after, until, when, if, not, never or yet does not count. A
+    heuristic over prose with known limits (README): other phrasings and hedges after the name ("done, apart from ...") are not read.
+    It is ADVISORY: reply-names-current is a soft check and never decides a verdict."""
     text = re.sub(r"[*_`]", "", reply)
     nm = re.escape(re.sub(r"[*_`]", "", name))
-    return bool(re.search(rf"{nm}{_JOIN}{_ADVERB}{_VERB}{_END}|{nm}\s*\u2705", text, re.I))
+    pattern = re.compile(rf"{nm}{_JOIN}{_ADVERB}{_VERB}{_END}|{nm}[ \t]*:?[ \t]*\u2705|{_VERB_FIRST}{nm}\b", re.I | re.M)
+    return any(not _HEDGE.search(_clause_before(text, m.start())) for m in pattern.finditer(text))
 
 
 def reply_names_current(case):
@@ -435,8 +517,8 @@ def state_problems(case):
             problems.append(f"#{ident} has no needs")
     for ident in case.row.want.needs_you:
         got = str(items.get(ident, {}).get("needs", "")).strip()
-        if not USER_NEEDS_RE.match(got):
-            problems.append(f"#{ident} needs {got!r}, wanted the user (you, author, me or user)")
+        if got.lower() not in USER_NEEDS:
+            problems.append(f"#{ident} needs {got!r}, wanted exactly 'you' or 'author' (the values that set the statusline flag)")
     return problems
 
 
@@ -476,6 +558,24 @@ def timestamps_by_script(case):
     return "timestamps-by-script", not problems, f"bookkeeping only milestones.py does: {problems or 'present'}"
 
 
+def unmatched_words(words, names):
+    """The words left without an item when every word needs its OWN item name containing it (case-insensitive): a maximum bipartite
+    matching, so that one item named 'schema importer migration' beside junk items satisfies one word, not three."""
+    owner = {}                                              # name index -> word index
+
+    def place(w, seen):
+        for n, name in enumerate(names):
+            if words[w].lower() in name.lower() and n not in seen:
+                seen.add(n)
+                if n not in owner or place(owner[n], seen):
+                    owner[n] = w
+                    return True
+        return False
+
+    placed = [place(w, set()) for w in range(len(words))]
+    return [word for word, ok in zip(words, placed) if not ok]
+
+
 def tracker_created(case):
     data, why = tracker_of(case.after)
     if data is None:
@@ -486,7 +586,7 @@ def tracker_created(case):
         problems.append(f"title is {data.get('title')!r}, wanted {want.title!r}")
     if len(items) != want.count:
         problems.append(f"{len(items)} items, wanted {want.count}")
-    problems += [f"no item name mentions {word!r}" for word in want.names if not any(word.lower() in str(i.get("name", "")).lower() for i in items.values())]
+    problems += [f"no distinct item name mentions {word!r}" for word in unmatched_words(want.names, [str(i.get("name", "")) for i in items.values()])]
     return "tracker-created", not problems, f"the new tracker: {problems or 'title, count and names as wanted'}"
 
 
@@ -497,20 +597,35 @@ def quiet_when_nothing_changed(case):
     old, new = items_of(before), items_of(after)
     fields = ("name", "state", "left", "needs")
     changed = sorted({i for i in set(old) | set(new) if i not in old or i not in new or any(old[i].get(f) != new[i].get(f) for f in fields)})
-    return "quiet-when-nothing-changed", not changed, f"items whose name, state, left or needs differ from before: {changed or 'none'}"
+    retitled = [] if before.get("title") == after.get("title") else ["the title"]
+    return "quiet-when-nothing-changed", not changed and not retitled, f"items whose name, state, left or needs differ from before: {changed or 'none'}; changed title: {retitled or 'no'}"
 
 
 # ---- which checks apply ------------------------------------------------------------------------------------
 
 SKILL_RUN = [agent_completed, plugin_under_test_isolated, skill_loaded, skill_trigger, not_permission_blocked]
-REMINDED = [agent_completed, plugin_under_test_isolated, skill_loaded, reminder_fired, reminder_delivered]
+REMINDED = [agent_completed, plugin_under_test_isolated, skill_loaded, reminder_fired, reminder_delivered, not_permission_blocked]
 GATES = [no_direct_tracker_write, tracker_not_committed, nothing_else_changed]
 BY_EXPECT = {
-    "show": SKILL_RUN + [shown_by_script, show_reads_only, reply_names_current] + GATES,
+    "show": SKILL_RUN + [shown_by_script, show_reads_only, no_write_attempt, reply_names_current] + GATES,
     "update": SKILL_RUN + [tracker_valid, wanted_state, others_untouched, timestamps_by_script, written_by_script] + GATES,
     "create": SKILL_RUN + [tracker_valid, tracker_created, written_by_script] + GATES,
-    "reminded-update": REMINDED + [not_permission_blocked, tracker_valid, wanted_state, others_untouched, timestamps_by_script, written_by_script] + GATES,
-    "reminded-quiet": REMINDED + [quiet_when_nothing_changed, tracker_valid] + GATES,
+    "reminded-update": REMINDED + [tracker_valid, wanted_state, others_untouched, timestamps_by_script, written_by_script] + GATES,
+    "reminded-quiet": REMINDED + [quiet_when_nothing_changed, no_write_attempt, tracker_valid] + GATES,
+}
+
+# What a failed precondition can explain. A trial with a failed precondition is INCONCLUSIVE only when every failed hard check is
+# explained by one of them; a failed check that none explains is the agent's own doing and the trial is FAIL (run_evals.verdict).
+# A script call that was denied, or a hook that never reached the model, leaves the script's effects missing (state, timestamps, the
+# table); it does not explain a direct tracker write, a commit, a stray file, a write attempt or a changed tracker on a read. A run that
+# did not complete, or an environment leak, explains the missing process and outcome facts, but not those gates either.
+NOT_RUN_EFFECTS = {"wanted-state", "timestamps-by-script", "written-by-script", "tracker-valid", "others-untouched", "tracker-created", "shown-by-script"}
+EXPLAINED_BY = {
+    "agent-completed": NOT_RUN_EFFECTS | {"skill-loaded", "skill-trigger", "quiet-when-nothing-changed"},    # quiet: a missing snapshot compares nothing
+    "plugin-under-test-isolated": NOT_RUN_EFFECTS | {"skill-loaded", "skill-trigger"},
+    "not-permission-blocked": NOT_RUN_EFFECTS,
+    "reminder-fired": NOT_RUN_EFFECTS,
+    "reminder-delivered": NOT_RUN_EFFECTS,
 }
 
 
@@ -524,8 +639,8 @@ def run_checks(case):
     """
     if case.row.expect == "none":
         has_tracker = TRACKER in build_fixture(case.row.fixture)
-        chosen = [agent_completed, plugin_under_test_isolated, skill_loaded, skill_trigger,
-                  show_reads_only if has_tracker else no_tracker_when_negative] + GATES
+        chosen = [agent_completed, plugin_under_test_isolated, skill_loaded, skill_trigger, not_permission_blocked,
+                  show_reads_only if has_tracker else no_tracker_when_negative, no_write_attempt] + GATES
     else:
         chosen = BY_EXPECT[case.row.expect]
     return [check(case) for check in chosen]

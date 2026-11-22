@@ -10,8 +10,10 @@ argument), `--add-dir <origin.git>` and `--plugin-dir <plugin>` (never a bare po
 environment variables EVAL_PROMPT_ID and EVAL_TRIAL, plus GIT_CONFIG_GLOBAL and GIT_CONFIG_SYSTEM pointing at the null device.
 Its stdout is the trace, saved as artifacts/<id>.jsonl; the snapshots before and after are saved as artifacts/<id>.state.json.
 The trial directory is deleted afterwards unless --keep is given.
-A trial is PASS, FAIL, or INCONCLUSIVE (the behaviour under test was never exercised, see checks.verdict).
-The exit code is 0 when every trial passes, 1 when a trial fails or is inconclusive, 2 when a run cannot start.
+A trial is PASS, FAIL, or INCONCLUSIVE (the behaviour under test was never exercised, or the run was cut short by a timeout, a
+budget stop or an error, see checks.verdict). Advisory ("soft") checks that rest on the model's prose are listed as WARN and never
+change the verdict or the exit code.
+The exit code is 0 when every trial passes (warnings or not), 1 when a trial fails or is inconclusive, 2 when a run cannot start.
 """
 import argparse
 import json
@@ -83,16 +85,30 @@ def run_agent(row, trial, args):
     return out, states, note
 
 
-def grade_trial(row, events, states):
+def abort_reason(events, run_note=""):
+    """Why the run was cut short by the environment, or "": the agent command exited non-zero (timeout 124, killed ...), there is no
+    result event, the result's subtype is not "success" (a budget stop is error_max_budget_usd) or it is flagged is_error."""
+    result = trace.result_event(events)
+    if run_note.startswith("agent command exited"):
+        return run_note
+    if result is None:
+        return "no result event in the trace"
+    if result.get("subtype") != "success":
+        return f"result subtype {result.get('subtype')!r}, not 'success'"
+    return "the result event has is_error set" if result.get("is_error") else ""
+
+
+def grade_trial(row, events, states, run_note=""):
     case = checks.Case.build(row, events, states)
-    results = [{"id": cid, "pass": ok, "notes": note} for cid, ok, note in checks.run_checks(case)]
+    results = [{"id": cid, "pass": ok, "notes": note, "group": checks.GROUPS[cid]} for cid, ok, note in checks.run_checks(case)]
     result = trace.result_event(events) or {}
     cost, turns = result.get("total_cost_usd"), result.get("num_turns")
     # no events at all: the agent never ran (not installed, not logged in, no recording): nothing was exercised;
     # no snapshots (a recording without its <id>.state.json): the repositories, the ground truth, were never seen
     complete = bool(events) and bool((states or {}).get("before")) and bool((states or {}).get("after"))
-    verdict = checks.verdict([r["id"] for r in results if not r["pass"]]) if complete else "INCONCLUSIVE"
-    return {"verdict": verdict, "checks": results, "turns": turns if isinstance(turns, int) else None,
+    aborted = abort_reason(events, run_note) if events else ""
+    verdict = checks.verdict([r["id"] for r in results if not r["pass"]], bool(aborted)) if complete else "INCONCLUSIVE"
+    return {"verdict": verdict, "aborted": aborted, "checks": results, "turns": turns if isinstance(turns, int) else None,
             "cost": cost if isinstance(cost, (int, float)) else None, "duration_ms": result.get("duration_ms")}
 
 
@@ -118,11 +134,16 @@ def run_all(rows, args):
                     trace_path(out_dir, row.id, trial, args.trials).write_text(text, encoding="utf-8", newline="\n")
                     trace_path(out_dir, row.id, trial, args.trials, "state.json").write_text(json.dumps(states, indent=1, sort_keys=True), encoding="utf-8", newline="\n")
                 events = trace.parse(text)[0]
-            result = grade_trial(row, events, states)
+            result = grade_trial(row, events, states, note)
             result.update(trial=trial, run_note=note)
             trials.append(result)
         prompts.append({"id": row.id, "expect": row.expect, "trials": trials})
     return {"label": args.label, "trials": args.trials, "prompts": prompts}
+
+
+def is_soft(check):
+    """True for a check result of an advisory (soft) check; an id this version does not know is hard."""
+    return checks.GROUPS.get(check["id"]) == "soft"
 
 
 def count(prompt):
@@ -134,28 +155,35 @@ def case_verdict(prompt):
     return "FAIL" if "FAIL" in verdicts else "INCONCLUSIVE" if "INCONCLUSIVE" in verdicts else "PASS"
 
 
-def failed_ids(prompt):
+def failed_ids(prompt, soft=False):
+    """The ids of the failed checks of a case: the hard ones, or with `soft` the advisory ones (WARN)."""
     ids = []
     for t in prompt["trials"]:
-        ids += [c["id"] for c in t["checks"] if not c["pass"] and c["id"] not in ids]
+        ids += [c["id"] for c in t["checks"] if not c["pass"] and is_soft(c) == soft and c["id"] not in ids]
     return ids
 
 
 def format_report(results):
     """The per-case table, the failures, the per-group counts and the summary line, as a list of lines."""
     w = max([len(p["id"]) for p in results["prompts"]] + [2]) + 2
-    lines = [f"{'id':<{w}}{'expect':<9}{'trials':<8}{'result':<14}failed checks"]
+    lines = [f"{'id':<{w}}{'expect':<9}{'trials':<8}{'result':<14}{'failed checks':<40}warnings (advisory)"]
     for p in results["prompts"]:
         passed, total = count(p)
-        lines.append(f"{p['id']:<{w}}{p['expect']:<9}{f'{passed}/{total}':<8}{case_verdict(p):<14}{', '.join(failed_ids(p)) or '-'}")
-    problems = []
+        lines.append(f"{p['id']:<{w}}{p['expect']:<9}{f'{passed}/{total}':<8}{case_verdict(p):<14}{', '.join(failed_ids(p)) or '-':<40}{', '.join(failed_ids(p, True)) or '-'}")
+    problems, warns = [], []
     for p in results["prompts"]:
         for t in p["trials"]:
             if t["run_note"]:
                 problems.append(f"  {p['id']} trial {t['trial']}: {t['run_note']}")
-            problems += [f"  {p['id']} trial {t['trial']} ({t['verdict']}): {c['id']}: {c['notes']}" for c in t["checks"] if not c["pass"]]
+            if t.get("aborted") and t["aborted"] != t["run_note"]:
+                problems.append(f"  {p['id']} trial {t['trial']}: run cut short ({t['aborted']}): INCONCLUSIVE unless a state check failed")
+            for c in t["checks"]:
+                if not c["pass"]:
+                    (warns if is_soft(c) else problems).append(f"  {p['id']} trial {t['trial']} ({t['verdict']}): {c['id']}: {c['notes']}")
     if problems:
         lines += ["", "failures:"] + problems
+    if warns:
+        lines += ["", "warnings (advisory checks on the model's wording; they never change the verdict):"] + warns
     groups = {}
     for p in results["prompts"]:
         for t in p["trials"]:
@@ -163,14 +191,19 @@ def format_report(results):
                 done, total = groups.get(checks.GROUPS[c["id"]], (0, 0))
                 groups[checks.GROUPS[c["id"]]] = (done + c["pass"], total + 1)
     lines += ["", "checks passed by group: " + ", ".join(f"{g} {groups[g][0]}/{groups[g][1]}" for g in GROUP_ORDER if g in groups)]
+    if "soft" in groups:
+        lines.append(f"advisory (soft) checks: {groups['soft'][0]}/{groups['soft'][1]} passed, WARN {groups['soft'][1] - groups['soft'][0]} (not part of any verdict)")
     trials = [t for p in results["prompts"] for t in p["trials"]]
     costs = [t["cost"] for t in trials if t["cost"] is not None]
     if costs:
         lines.append(f"cost reported by the result events: ${sum(costs):.4f} over {len(costs)} runs")
     tally = {v: sum(1 for t in trials if t["verdict"] == v) for v in ("PASS", "FAIL", "INCONCLUSIVE")}
-    lines.append(f"summary: trials PASS {tally['PASS']}, FAIL {tally['FAIL']}, INCONCLUSIVE {tally['INCONCLUSIVE']} of {len(trials)}")
+    warned = sum(1 for t in trials if any(not c["pass"] and is_soft(c) for c in t["checks"]))
+    lines.append(f"summary: trials PASS {tally['PASS']}, FAIL {tally['FAIL']}, INCONCLUSIVE {tally['INCONCLUSIVE']} of {len(trials)}; "
+                 f"WARN in {warned} trial(s) (advisory only)")
     if tally["INCONCLUSIVE"]:
-        lines.append("INCONCLUSIVE means the behaviour under test was not exercised (see the failed preconditions above): it is not a verdict on the plugin; run again")
+        lines.append("INCONCLUSIVE means the behaviour under test was not exercised (see the failed preconditions above) or the run was cut short "
+                     "(timeout, budget, error): it is not a verdict on the plugin; run again")
     return lines
 
 

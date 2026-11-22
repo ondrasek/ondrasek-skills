@@ -13,6 +13,8 @@ trace, saved as artifacts/<id>.jsonl; the snapshots (workspace before and after 
 saved as artifacts/<id>.state.json together with the runner's note (non-zero exit, timeout, missing session id) as `run_note`. The root is deleted after the last snapshot unless --keep is given.
 A trial is PASS, FAIL or INCONCLUSIVE (a precondition failed: the behaviour was never exercised; see checks.verdict).
 A run that did not finish (non-zero exit, timeout, no success result event) is INCONCLUSIVE too (check run-completed).
+Advisory (soft) checks, which only match words in text the model wrote, are listed as WARN with their note: they never change the
+verdict or the exit code, so a trial that fails only those is a PASS with warnings.
 The exit code is 0 when every trial passes, 1 when a trial fails or is inconclusive, 2 when a run cannot start.
 """
 import argparse
@@ -108,8 +110,9 @@ def grade_trial(row, events, states, note=""):
     # the cost of the LAST result event: assumed (unconfirmed) to be the whole session's on a resumed turn, in which case trace.stats
     # (a sum over result events) would count turn 1 twice
     cost = result.get("total_cost_usd")
-    verdict = checks.verdict(outcomes)
-    return {"verdict": verdict, "passed": verdict == "PASS", "checks": [{"id": c, "pass": ok, "notes": note} for c, ok, note in outcomes],
+    verdict = checks.verdict(case, outcomes)
+    return {"verdict": verdict, "passed": verdict == "PASS", "warnings": checks.warnings(outcomes),
+            "checks": [{"id": c, "group": checks.GROUPS[c], "pass": ok, "notes": note} for c, ok, note in outcomes],
             "turns": result.get("num_turns"), "cost": cost if isinstance(cost, (int, float)) else None, "duration_ms": result.get("duration_ms")}
 
 
@@ -150,35 +153,46 @@ def case_verdict(prompt):
 
 
 def failed_ids(prompt):
+    """The hard checks that failed in any trial of the case (the advisory ones are warned_ids)."""
     ids = []
     for t in prompt["trials"]:
-        ids += [c["id"] for c in t["checks"] if not c["pass"] and c["id"] not in ids]
+        ids += [c["id"] for c in t["checks"] if not c["pass"] and c["id"] not in checks.SOFT and c["id"] not in ids]
+    return ids
+
+
+def warned_ids(prompt):
+    ids = []
+    for t in prompt["trials"]:
+        ids += [w for w in t.get("warnings", []) if w not in ids]
     return ids
 
 
 def format_report(results):
     """The per-case table, the failures, the per-group counts and the summary line, as a list of lines."""
     w = max([len(p["id"]) for p in results["prompts"]] + [2]) + 2
-    lines = [f"{'id':<{w}}{'kind':<12}{'expect':<14}{'trigger':<9}{'trials':<8}{'result':<14}failed checks"]
+    lines = [f"{'id':<{w}}{'kind':<12}{'expect':<14}{'trigger':<9}{'trials':<8}{'result':<14}{'failed checks':<40}warn (advisory)"]
     for p in results["prompts"]:
         passed, total = count(p)
         lines.append(f"{p['id']:<{w}}{p['kind']:<12}{p['expect']:<14}{'yes' if p['should_trigger'] else 'no':<9}"
-                     f"{f'{passed}/{total}':<8}{case_verdict(p):<14}{', '.join(failed_ids(p)) or '-'}")
-    problems = []
+                     f"{f'{passed}/{total}':<8}{case_verdict(p):<14}{', '.join(failed_ids(p)) or '-':<40}{', '.join(warned_ids(p)) or '-'}")
+    problems, warned = [], []
     for p in results["prompts"]:
         for t in p["trials"]:
             if t["run_note"]:
                 problems.append(f"  {p['id']} trial {t['trial']}: {t['run_note']}")
-            problems += [f"  {p['id']} trial {t['trial']} [{t['verdict']}]: {c['id']}: {c['notes']}" for c in t["checks"] if not c["pass"]]
+            problems += [f"  {p['id']} trial {t['trial']} [{t['verdict']}]: {c['id']}: {c['notes']}" for c in t["checks"] if not c["pass"] and c["id"] not in checks.SOFT]
+            warned += [f"  {p['id']} trial {t['trial']} [WARN]: {c['id']}: {c['notes']}" for c in t["checks"] if not c["pass"] and c["id"] in checks.SOFT]
     if problems:
         lines += ["", "failures (an INCONCLUSIVE trial lists its failed gate and outcome checks too: they may follow from the failed precondition):"] + problems
+    if warned:
+        lines += ["", "warnings (advisory text checks: they never change the verdict or the exit code):"] + warned
     groups = {}
     for p in results["prompts"]:
         for t in p["trials"]:
             for c in t["checks"]:
                 done, total = groups.get(checks.GROUPS[c["id"]], (0, 0))
                 groups[checks.GROUPS[c["id"]]] = (done + c["pass"], total + 1)
-    lines += ["", "checks passed by group: " + ", ".join(f"{g} {groups[g][0]}/{groups[g][1]}" for g in ("precondition", "process", "gate", "outcome") if g in groups)]
+    lines += ["", "checks passed by group: " + ", ".join(f"{g} {groups[g][0]}/{groups[g][1]}" for g in ("precondition", "process", "gate", "outcome", "soft") if g in groups)]
     trials = [t for p in results["prompts"] for t in p["trials"]]
     costs = [t["cost"] for t in trials if t["cost"] is not None]
     if costs:
@@ -186,9 +200,11 @@ def format_report(results):
     prompts_ok = sum(1 for p in results["prompts"] if case_verdict(p) == "PASS")
     trials_ok = sum(1 for t in trials if t["passed"])
     inconclusive = sum(1 for t in trials if t["verdict"] == "INCONCLUSIVE")
+    warned_trials = sum(1 for t in trials if t.get("warnings"))
     rate = 100 * trials_ok // len(trials) if trials else 0
     lines.append(f"summary: cases passed {prompts_ok}/{len(results['prompts'])} (every trial), trials passed {trials_ok}/{len(trials)}, "
-                 f"inconclusive {inconclusive}, failed {len(trials) - trials_ok - inconclusive}, pass rate {rate}%")
+                 f"inconclusive {inconclusive}, failed {len(trials) - trials_ok - inconclusive}, pass rate {rate}%, "
+                 f"WARN (advisory, not in the verdict) on {warned_trials} trial(s)")
     return lines
 
 

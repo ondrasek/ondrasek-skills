@@ -13,6 +13,7 @@ only in the case it concerns; every other case behaves well:
     init-only         none: the run prints the init event and stops (an auth failure, a kill after start)
     budget-stop       none: init, then an error result (error_max_budget_usd, is_error)
     crash             none: a complete good trace, but the process exits 3
+    wrong-reply       show: the reply says the milestone in progress is done (a prose heuristic: WARN, never a FAIL)
 
 The script runs by subprocess, never imported (an import would write __pycache__ under plugins/), with every MILESTONES_* and CLAUDE_*
 variable removed from its environment, so that it can only act on the project of its cwd.
@@ -71,6 +72,8 @@ def reminder():
 
 
 reply = helpers.REPLY[case]
+if case == "show" and mode == "wrong-reply":
+    reply = "Storage layer is done; Sync API is next."
 if case == "show":
     skill()
     milestones("show")

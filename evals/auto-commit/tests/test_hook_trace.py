@@ -39,6 +39,15 @@ class Hooks(unittest.TestCase):
         self.assertEqual(hook_trace.continuation([helpers.init(), helpers.hook_report(), helpers.result()], MARK), "fed")
         self.assertFalse(hook_trace.fed_to_model([helpers.hook_event()], MARK))
 
+    def test_model_prose_and_command_output_are_not_the_report(self):
+        # an agent that quotes the marker in its reply, or reads it out of a file, must not make itself the evidence
+        quoted = {"type": "assistant", "message": {"content": [{"type": "text", "text": f"{MARK}: I saw this"}]}}
+        output = {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": f"{MARK} in a file"}]}}
+        self.assertEqual(hook_trace.continuation([helpers.init(), quoted, output, helpers.result(text=f"{MARK} again")], MARK), "none")
+        self.assertEqual(hook_trace.continuation([helpers.init(), quoted, helpers.hook_report()], MARK), "fed")
+        plain = {"type": "user", "message": {"role": "user", "content": f"Stop hook feedback: {MARK}: unsaved"}}
+        self.assertEqual(hook_trace.continuation([plain], MARK), "fed")
+
     def test_the_report_in_a_stop_hook_event_only(self):
         self.assertEqual(hook_trace.continuation([helpers.init(), helpers.hook_event()], MARK), "hook-event-only")
         self.assertEqual(hook_trace.continuation([{"type": "system", "subtype": "hook_response", "hook_event": "Stop", "exit_code": 2, "stderr": MARK}], MARK), "hook-event-only")

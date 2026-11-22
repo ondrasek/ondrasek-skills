@@ -4,7 +4,8 @@ import unittest
 import helpers
 import checks
 import run_evals
-from helpers import NOTHING, SAME, SET_2_DONE, SET_3_DOING, SHOW, SKILL_ID, moved, tracker
+import test_schema_check
+from helpers import INIT_EMPTY, NOTHING, SAME, SET_2_DONE, SET_3_DOING, SHOW, SKILL_ID, moved, tracker
 
 SKILL_CALL = ("Skill", {"skill": SKILL_ID})
 READ_TRACKER = ("Bash", {"command": "cat .cache/milestones.json"})
@@ -50,6 +51,9 @@ MUTATIONS = {
     "reminder-fired": ("reminded-update", dict(marker=False)),
     "reminder-delivered": ("reminded-quiet", dict(hook=False)),
     "quiet-when-nothing-changed": ("reminded-quiet", dict(after_tracker=moved(tracker("stale-idle"), {2: "done"}))),
+    # R3-1: an invented update the script refused (is_error, no denial) leaves the tracker as it was: only the trace shows the attempt
+    "no-write-attempt": ("reminded-quiet", dict(calls=[("Read", {"file_path": "/w/src/textutil.py"}), ("Bash", {"command": SET_2_DONE})],
+                                                outputs={SET_2_DONE: ("error: item 2 is already doing", True)})),
 }
 
 
@@ -71,12 +75,13 @@ class GoodRuns(unittest.TestCase):
     def test_a_negative_on_a_tracker_fixture_may_edit_code(self):
         results = run("none", fixture="tracker", src_edit=True)
         self.assertEqual(sorted(results), sorted(["agent-completed", "plugin-under-test-isolated", "show-reads-only", "skill-loaded", "skill-trigger", "no-direct-tracker-write",
-                                                  "tracker-not-committed", "nothing-else-changed"]))
+                                                  "tracker-not-committed", "nothing-else-changed", "not-permission-blocked", "no-write-attempt"]))
         self.assertTrue(all(ok for ok, _ in results.values()))
 
     def test_a_negative_on_a_bare_fixture_runs_the_bare_branch(self):
         self.assertEqual(sorted(run("none")), sorted(["agent-completed", "plugin-under-test-isolated", "no-tracker-when-negative", "skill-loaded", "skill-trigger",
-                                                      "no-direct-tracker-write", "tracker-not-committed", "nothing-else-changed"]))
+                                                      "no-direct-tracker-write", "tracker-not-committed", "nothing-else-changed", "not-permission-blocked",
+                                                      "no-write-attempt"]))
 
     def test_the_checks_that_run_are_known(self):
         for expect in BARE_EXPECTS:
@@ -162,12 +167,18 @@ class Process(unittest.TestCase):
         self.assertNotIn("skill-trigger", run("reminded-update"))
         self.assertNotIn("skill-trigger", run("reminded-quiet"))
 
-    def test_the_script_regex(self):
-        for command in ['python3 "/p/skills/milestones/scripts/milestones.py" show', "python3 /p/milestones.py show --json",
-                        "cd /w && python3 '/p/milestones.py' set 2 --state done", "python3 milestones.py init --empty --title X"]:
-            self.assertTrue(checks.SCRIPT_RE.search(command), command)
-        for command in ["cat .cache/milestones.json", "python3 other.py show", "python3 /p/milestones.py statusline", "python3 /p/milestones.py"]:
-            self.assertFalse(checks.SCRIPT_RE.search(command), command)
+    def test_the_script_invocations_come_from_the_parsed_argv(self):
+        for command, subs in [('python3 "/p/skills/milestones/scripts/milestones.py" show', ["show"]), ("python3 /p/milestones.py show --json", ["show"]),
+                              ("cd /w && python3 '/p/milestones.py' set 2 --state done", ["set"]), ("python3 milestones.py init --empty --title X", ["init"]),
+                              ("MILESTONES_FILE=x python3 -u /p/milestones.py add --name y", ["add"]),
+                              ('python3 /p/milestones.py set 2 --state done && python3 /p/milestones.py show', ["set", "show"]),
+                              ("python3.12 /p/milestones.py title Z", ["title"])]:
+            self.assertEqual(checks.script_invocations(command), subs, command)
+        # a text that only mentions the script is not a call; neither is another subcommand
+        for command in ["cat .cache/milestones.json", "python3 other.py show", "python3 /p/milestones.py statusline", "python3 /p/milestones.py",
+                        "echo python3 milestones.py set 2", "grep -n 'milestones.py set' notes.txt", "python3 -c \"print('milestones.py set 2')\"",
+                        "vim milestones.py"]:
+            self.assertEqual(checks.script_invocations(command), [], command)
 
     def test_a_show_with_a_cd_prefix_and_json_counts(self):
         self.assertEqual(failed("show", calls=[SKILL_CALL, ("Bash", {"command": f'cd /w && python3 "{helpers.SCRIPT}" show --json'})]), [])
@@ -257,6 +268,35 @@ class Gates(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertTrue(checks.writes_tracker(command), command)
 
+    def test_more_writes_in_their_spellings_fail(self):
+        # R3-7: tools that rewrite a file in place, with a script call beside them that would fake the timestamps
+        for command in ["perl -pi -e 's/todo/done/' .cache/milestones.json", "perl -i.bak -pe 's/a/b/' .cache/milestones.json",
+                        "perl -pie 's/a/b/' .cache/milestones.json", "jq '.title=\"x\"' .cache/milestones.json | sponge .cache/milestones.json",
+                        "dd if=/tmp/x.json of=.cache/milestones.json", "awk -i inplace '{print}' .cache/milestones.json",
+                        "sed --in-place s/a/b/ .cache/milestones.json", "git rm .cache/milestones.json"]:
+            with self.subTest(command=command):
+                self.assertTrue(checks.writes_tracker(command), command)
+                self.assertEqual(failed("update", calls=helpers.CALLS["update"] + [("Bash", {"command": command})]), ["no-direct-tracker-write"])
+
+    def test_more_reads_pass(self):
+        for command in ["python3 -c \"import json, sys; d = json.load(open('.cache/milestones.json')); json.dump(d, sys.stdout, indent=2)\"",
+                        "python3 -c \"import json,sys; json.dump(json.load(open('.cache/milestones.json')), sys.stderr)\"",
+                        "git rm --cached .cache/milestones.json", "git rm -r --cached -q .cache/milestones.json",
+                        "perl -ne 'print if /todo/' .cache/milestones.json", "perl -Mstrict -e 'print 1' .cache/milestones.json",
+                        "dd if=.cache/milestones.json of=/tmp/copy.json", "awk '/state/' .cache/milestones.json", "sed -n 1,5p .cache/milestones.json",
+                        "jq .title .cache/milestones.json", "wc -l .cache/milestones.json", "git log --oneline -- .cache/milestones.json"]:
+            with self.subTest(command=command):
+                self.assertFalse(checks.writes_tracker(command), command)
+
+    def test_a_dump_to_a_real_file_is_still_a_write(self):
+        self.assertTrue(checks.writes_tracker("python3 -c \"import json; json.dump({}, open('.cache/milestones.json', 'w')); print(1, file=sys.stdout)\""))
+        self.assertTrue(checks.writes_tracker("python3 -c \"import json; f = open('.cache/milestones.json', 'w'); json.dump({}, f)\""))
+
+    def test_a_script_text_that_only_mentions_the_script_does_not_excuse_a_write(self):
+        command = "python3 -c \"open('.cache/milestones.json', 'w').write('{}')\"  # python3 milestones.py show"
+        self.assertTrue(checks.writes_tracker(command))
+        self.assertTrue(checks.writes_tracker("echo 'python3 milestones.py show' && echo x > .cache/milestones.json"))
+
     def test_split_commands_respects_quotes(self):
         self.assertEqual(checks.split_commands("a && b; c | d\ne || f"), ["a ", " b", " c ", " d", "e ", " f"])
         self.assertEqual(checks.split_commands("python3 -c \"x; y | z && w\" ; echo 'a;b'"), ["python3 -c \"x; y | z && w\" ", " echo 'a;b'"])
@@ -306,6 +346,28 @@ class Outcome(unittest.TestCase):
             with self.subTest(reply=reply):
                 self.assertEqual(failed("show", reply=reply), ["reply-names-current"])
 
+    def test_a_reply_that_says_it_is_finished_in_other_words_fails(self):
+        # R3: probes that passed undetected: a verb before the name, "has finished", a check mark after a colon
+        for reply in ("Storage layer has finished; Sync API is next.", "Storage layer: \u2705 all tables migrated.", "We finished the Storage layer.",
+                      "Storage layer has been shipped.", "Storage layer has wrapped up.", "I completed Storage layer this morning.", "Storage layer is done\nSync API is next.",
+                      "Storage layer \u2705\nSync API next"):
+            with self.subTest(reply=reply):
+                self.assertEqual(failed("show", reply=reply), ["reply-names-current"])
+
+    def test_a_status_list_and_a_subordinate_clause_are_not_a_claim(self):
+        # R3-3: the next line or cell starting with "Done:" is a label, not the verb of the line before; "once ... is done" is a plan
+        for reply in ("In progress: Storage layer\nDone: Schema design\nNext: Sync API", "**In progress:** Storage layer\n**Done:** Schema design",
+                      "Current: Storage layer | Done: Schema design | Next: Sync API", "Sync API starts once Storage layer is done, then Release sign-off.",
+                      "After Storage layer is finished, Sync API and Release sign-off remain.", "\U0001f7e1 Storage layer\n\u2705 Schema design",
+                      "Storage layer:\nDone: Schema design", "We have not finished the Storage layer yet.", "Until the Storage layer is done nothing ships.",
+                      "Storage layer, then Done: nothing yet."):
+            with self.subTest(reply=reply):
+                self.assertEqual(failed("show", reply=reply), [])
+
+    def test_the_real_show_output_does_not_claim_done(self):
+        row, events, states = helpers.good("show", reply=helpers.show_output(tracker("tracker")))
+        self.assertTrue({c: ok for c, ok, _ in checks.run_checks(checks.Case.build(row, events, states))}["reply-names-current"])
+
     def test_a_reply_that_says_it_is_in_progress_passes(self):
         for reply in ("Schema design is done and Storage layer is in progress.", "Storage layer: in progress, not done yet.", "Storage layer is not done; Sync API is next.",
                       "Right now: Storage layer (migrations left).",
@@ -349,11 +411,18 @@ class Outcome(unittest.TestCase):
         self.assertEqual(failed("update", after_tracker=renamed), ["others-untouched"])
 
     def test_needs_must_name_the_user_when_the_prompt_says_so(self):
+        # R3-2: the field behind the statusline flag: the plugin's is_you() takes exactly "you" or "author", case aside
         want = "4=blocked,4.needs=you"
         blocked = moved(T, {4: "blocked"})
-        for value, bad in (("legal", True), ("", True), ("you", False), ("You", False), ("author", False), ("me", False), ("you (the key from legal)", False), ("member", True)):
+        for value, bad in (("legal", True), ("", True), ("you", False), ("You", False), ("author", False), (" Author ", False), ("me", True), ("user", True),
+                           ("you (the key from legal)", True), ("you: signing key from legal", True), ("Me, signing key from legal", True), ("member", True)):
             blocked["items"][3]["needs"] = value
             self.assertEqual(failed("update", want=want, after_tracker=blocked), ["wanted-state"] if bad else [], value)
+
+    def test_the_wanted_needs_agree_with_the_plugin_is_you(self):
+        script = test_schema_check.load_script()
+        for value in ("you", "You", "author", "me", "user", "you (x)", "legal", ""):
+            self.assertEqual(value.strip().lower() in checks.USER_NEEDS, script.is_you(value, set()), value)
 
     def test_a_removed_or_renumbered_item_fails_others_untouched(self):
         gone = moved(T, {2: "done", 3: "doing"})
@@ -388,6 +457,21 @@ class Outcome(unittest.TestCase):
         notes = run("create", after_tracker=few)["tracker-created"][1]
         self.assertIn("1 items", notes)
         self.assertIn("importer", notes)
+
+    def test_each_wanted_name_needs_its_own_item(self):
+        # R3-8: one item holding every keyword plus junk items is not three milestones
+        junk = {"title": "Importer", "updated": helpers.FUTURE, "items": [{"id": 1, "name": "schema importer migration", "state": "todo"},
+                                                                         {"id": 2, "name": "a", "state": "todo"}, {"id": 3, "name": "b", "state": "todo"}]}
+        notes = run("create", after_tracker=junk)["tracker-created"]
+        self.assertFalse(notes[0])
+        self.assertIn("distinct", notes[1])
+        self.assertEqual(failed("create", after_tracker=junk), ["tracker-created"])
+
+    def test_unmatched_words_is_a_matching_not_a_greedy_scan(self):
+        self.assertEqual(checks.unmatched_words(["schema", "importer"], ["importer schema", "importer"]), [])
+        self.assertEqual(len(checks.unmatched_words(["schema", "importer", "migration"], ["schema importer migration", "a", "b"])), 2)
+        self.assertEqual(checks.unmatched_words(["a"], []), ["a"])
+        self.assertEqual(checks.unmatched_words([], ["x"]), [])
 
     def test_a_tracker_that_existed_before_is_not_created(self):
         row, events, states = helpers.good("create")
@@ -485,6 +569,167 @@ class Precondition(unittest.TestCase):
         self.assertFalse(results["not-permission-blocked"])
 
 
+class MaskedWrites(unittest.TestCase):
+    """R3-1: a failed or refused tracker write must not hide in the quiet, read and negative cases."""
+
+    def verdict(self, expect, **override):
+        row, events, states = helpers.good(expect, **override)
+        return run_evals.grade_trial(row, events, states)["verdict"]
+
+    def test_a_denied_invented_update_in_a_quiet_run_is_a_fail(self):
+        denial = {"tool_name": "Bash", "tool_use_id": "d1", "tool_input": {"command": SET_2_DONE}}
+        row, events, states = helpers.good("reminded-quiet", calls=[("Read", {"file_path": "/w/src/textutil.py"})], denials=[denial])
+        call = helpers.call("Bash", command=SET_2_DONE)
+        call["message"]["content"][0]["id"] = "d1"
+        events.insert(2, call)
+        events.insert(3, helpers.tool_result("d1", "Permission to use Bash has been denied.", is_error=True))
+        got = {c: ok for c, ok, _ in checks.run_checks(checks.Case.build(row, events, states))}
+        self.assertFalse(got["no-write-attempt"])
+        self.assertFalse(got["not-permission-blocked"])
+        self.assertEqual(run_evals.grade_trial(row, events, states)["verdict"], "FAIL")
+
+    def test_a_refused_invented_update_in_a_quiet_run_is_a_fail(self):
+        self.assertEqual(failed(*MUTATIONS["no-write-attempt"][:1], **MUTATIONS["no-write-attempt"][1]), ["no-write-attempt"])
+        self.assertEqual(self.verdict(MUTATIONS["no-write-attempt"][0], **MUTATIONS["no-write-attempt"][1]), "FAIL")
+
+    def test_a_retitle_through_the_script_or_in_the_file_fails_the_quiet_run(self):
+        retitle = f'python3 "{helpers.SCRIPT}" title "Other"'
+        retitled = {**tracker("stale-idle"), "title": "Other"}
+        self.assertEqual(failed("reminded-quiet", after_tracker=retitled), ["quiet-when-nothing-changed"])
+        self.assertEqual(failed("reminded-quiet", after_tracker=retitled, calls=[("Bash", {"command": retitle})]), ["no-write-attempt", "quiet-when-nothing-changed"])
+
+    def test_a_denied_init_in_a_negative_run_is_a_fail(self):
+        denial = {"tool_name": "Bash", "tool_input": {"command": INIT_EMPTY}}
+        self.assertEqual(failed("none", calls=[("Bash", {"command": INIT_EMPTY})], denials=[denial], outputs={INIT_EMPTY: ("denied", True)}),
+                         ["no-write-attempt", "not-permission-blocked"])
+        self.assertEqual(self.verdict("none", calls=[("Bash", {"command": INIT_EMPTY})], denials=[denial], outputs={INIT_EMPTY: ("denied", True)}), "FAIL")
+        self.assertEqual(failed("none", fixture="tracker", calls=[("Bash", {"command": SET_2_DONE})], outputs={SET_2_DONE: ("error", True)}), ["no-write-attempt"])
+
+    def test_a_write_attempt_in_a_read_run_fails(self):
+        self.assertEqual(failed("show", calls=helpers.CALLS["show"] + [("Bash", {"command": SET_2_DONE})], outputs={SET_2_DONE: ("error", True)}), ["no-write-attempt"])
+
+    def test_reading_the_tracker_through_the_script_is_not_a_write_attempt(self):
+        self.assertEqual(failed("reminded-quiet", calls=[("Bash", {"command": SHOW})]), [])
+        self.assertEqual(failed("none", calls=[("Bash", {"command": f'python3 "{helpers.SCRIPT}" statusline'})]), [])
+
+    def test_the_isolation_denial_and_attempt_checks_run_where_the_tracker_must_not_change(self):
+        for expect in ("none", "reminded-quiet", "show"):
+            self.assertIn("not-permission-blocked", run(expect), expect)
+            self.assertIn("no-write-attempt", run(expect), expect)
+        for expect in ("update", "create", "reminded-update"):
+            self.assertNotIn("no-write-attempt", run(expect), expect)
+
+
+class DenialShapes(unittest.TestCase):
+    """R3-5: a denial that shows only as an is_error tool_result, or as an element without tool_input, is INCONCLUSIVE, not FAIL."""
+
+    def grade(self, expect="update", **override):
+        row, events, states = helpers.good(expect, **override)
+        results = {c: ok for c, ok, _ in checks.run_checks(checks.Case.build(row, events, states))}
+        return results, run_evals.grade_trial(row, events, states)["verdict"]
+
+    def test_a_denial_seen_only_as_an_error_result_is_inconclusive(self):
+        text = "Claude requested permissions to use Bash, but you haven't granted it yet."
+        results, verdict = self.grade(after_tracker=SAME, outputs={SET_2_DONE: (text, True), SET_3_DOING: (text, True)})
+        self.assertFalse(results["not-permission-blocked"])
+        self.assertEqual(verdict, "INCONCLUSIVE")
+
+    def test_a_denial_element_with_an_id_and_no_input_is_inconclusive(self):
+        row, events, states = helpers.good("update", after_tracker=SAME)
+        script_call = next(e for e in events if e.get("type") == "assistant" and "set 2" in str(e))
+        ident = script_call["message"]["content"][0]["id"]
+        events[-1]["permission_denials"] = [{"tool_name": "Bash", "tool_use_id": ident}]
+        results = {c: ok for c, ok, _ in checks.run_checks(checks.Case.build(row, events, states))}
+        self.assertFalse(results["not-permission-blocked"])
+        self.assertEqual(run_evals.grade_trial(row, events, states)["verdict"], "INCONCLUSIVE")
+
+    def test_a_denial_without_an_id_whose_own_result_is_an_error_and_a_successful_retry_is_a_pass(self):
+        # Q5: the element names the command only; the first call's result is the denial (is_error), the identical retry succeeds
+        denial = {"tool_name": "Bash", "tool_input": {"command": SET_2_DONE}}
+        row, events, states = helpers.good("update", denials=[denial], calls=[SKILL_CALL, ("Bash", {"command": SET_2_DONE}), ("Bash", {"command": SET_2_DONE}),
+                                                                           ("Bash", {"command": SET_3_DOING})])
+        first = next(e for e in events if e.get("type") == "user" and e["message"]["content"][0].get("type") == "tool_result")
+        first["message"]["content"][0].update(is_error=True, content="Permission to use Bash has been denied.")
+        results = {c: ok for c, ok, _ in checks.run_checks(checks.Case.build(row, events, states))}
+        self.assertTrue(results["not-permission-blocked"])
+        self.assertEqual(run_evals.grade_trial(row, events, states)["verdict"], "PASS")
+
+    def test_an_error_result_that_is_not_a_denial_is_not_a_permission_block(self):
+        results, verdict = self.grade(after_tracker=SAME, outputs={SET_2_DONE: ("error: no such item", True), SET_3_DOING: ("error: no such item", True)})
+        self.assertTrue(results["not-permission-blocked"])
+        self.assertEqual(verdict, "FAIL")
+
+    def test_a_denied_call_retried_after_an_error_result_denial_is_cleared(self):
+        text = "Permission to use Bash has been denied."
+        row, events, states = helpers.good("update", calls=[SKILL_CALL, ("Bash", {"command": SET_2_DONE}), ("Bash", {"command": SET_2_DONE}), ("Bash", {"command": SET_3_DOING})])
+        first = next(e for e in events if e.get("type") == "user" and e["message"]["content"][0].get("type") == "tool_result")
+        first["message"]["content"][0].update(is_error=True, content=text)
+        self.assertTrue({c: ok for c, ok, _ in checks.run_checks(checks.Case.build(row, events, states))}["not-permission-blocked"])
+
+
+class VerdictAttribution(unittest.TestCase):
+    """R3-4: a failed precondition masks only what it explains; a hand write of the tracker is the agent's own doing."""
+
+    def grade(self, expect, **override):
+        row, events, states = helpers.good(expect, **override)
+        trial = run_evals.grade_trial(row, events, states)
+        return trial["verdict"], sorted(c["id"] for c in trial["checks"] if not c["pass"])
+
+    def test_a_denied_script_then_a_hand_write_is_a_fail(self):
+        denial = {"tool_name": "Bash", "tool_use_id": "d1", "tool_input": {"command": SET_2_DONE}}
+        row, events, states = helpers.good("update", denials=[denial], calls=[SKILL_CALL, ("Write", {"file_path": ".cache/milestones.json"})],
+                                           after_tracker=moved(T, {2: "done", 3: "doing"}))
+        denied = helpers.call("Bash", command=SET_2_DONE)
+        denied["message"]["content"][0]["id"] = "d1"
+        events.insert(2, denied)
+        events.insert(3, helpers.tool_result("d1", "Permission to use Bash has been denied.", is_error=True))
+        trial = run_evals.grade_trial(row, events, states)
+        failing = {c["id"] for c in trial["checks"] if not c["pass"]}
+        self.assertEqual(failing, {"not-permission-blocked", "no-direct-tracker-write"})
+        self.assertEqual(trial["verdict"], "FAIL")
+
+    def test_a_hand_write_before_stop_with_no_marker_is_a_fail(self):
+        by_hand = moved(tracker("stale-task"), {2: "done"})
+        by_hand["items"][1].pop("finished")
+        by_hand["updated"] = tracker("stale-task")["updated"]
+        verdict, failing = self.grade("reminded-update", hook=False, marker=False, after_tracker=by_hand, calls=[("Write", {"file_path": ".cache/milestones.json"})])
+        self.assertEqual(verdict, "FAIL")
+        self.assertIn("no-direct-tracker-write", failing)
+        self.assertIn("reminder-fired", failing)
+
+    def test_a_denial_alone_still_explains_the_missing_outcome(self):
+        denial = {"tool_name": "Bash", "tool_input": {"command": SET_2_DONE}}
+        self.assertEqual(self.grade("update", denials=[denial], after_tracker=SAME, outputs={SET_2_DONE: ("denied", True)}),
+                         ("INCONCLUSIVE", ["not-permission-blocked", "timestamps-by-script", "wanted-state"]))
+
+    def test_a_denial_does_not_explain_a_commit_or_a_stray_file(self):
+        denial = {"tool_name": "Bash", "tool_input": {"command": SET_2_DONE}}
+        got = self.grade("update", denials=[denial], after_tracker=SAME, outputs={SET_2_DONE: ("denied", True)}, committed=[".cache/milestones.json"])
+        self.assertEqual(got[0], "FAIL")
+        got = self.grade("update", denials=[denial], after_tracker=SAME, outputs={SET_2_DONE: ("denied", True)}, after_extra={"notes.md": "x"})
+        self.assertEqual(got[0], "FAIL")
+
+    def test_an_incomplete_run_explains_missing_facts_but_not_a_stray_file(self):
+        self.assertEqual(self.grade("update", result_error="error_max_budget_usd", calls=[SKILL_CALL], after_tracker=SAME)[0], "INCONCLUSIVE")
+        self.assertEqual(self.grade("update", result_error="error_max_budget_usd", calls=[SKILL_CALL], after_tracker=SAME, after_extra={"notes.md": "x"})[0], "FAIL")
+
+    def test_a_missing_snapshot_is_inconclusive_in_every_case(self):
+        # the snapshots are the evidence of the state checks: without them nothing is compared
+        for expect in BARE_EXPECTS:
+            row, events, states = helpers.good(expect)
+            self.assertEqual(run_evals.grade_trial(row, events, {})["verdict"], "INCONCLUSIVE", expect)
+
+    def test_every_precondition_has_an_explanation_over_known_checks(self):
+        self.assertEqual({c for c, g in checks.GROUPS.items() if g == "precondition"}, set(checks.EXPLAINED_BY))
+        for cid, explained in checks.EXPLAINED_BY.items():
+            self.assertLessEqual(explained, set(checks.GROUPS), cid)
+            self.assertFalse({c for c in explained if checks.GROUPS[c] == "precondition"}, cid)
+        # the gates that catch the agent's own misbehaviour are never explained away
+        for gate in ("no-direct-tracker-write", "no-write-attempt", "tracker-not-committed", "nothing-else-changed", "show-reads-only", "no-tracker-when-negative"):
+            for cid, explained in checks.EXPLAINED_BY.items():
+                self.assertNotIn(gate, explained, cid)
+
+
 class AgentCompleted(unittest.TestCase):
     def grade(self, expect, mutate, **override):
         row, events, states = helpers.good(expect, **override)
@@ -526,7 +771,7 @@ class AgentCompleted(unittest.TestCase):
         # R2-2 / Q6: reminded-quiet, the agent invents `set 2 --state done`, reply ''
         invented = moved(tracker("stale-idle"), {2: "done"})
         results = self.grade("reminded-quiet", self.keep, reply="", after_tracker=invented, calls=[("Bash", {"command": SET_2_DONE})])
-        self.assertEqual(sorted(c for c, (ok, _) in results.items() if not ok), ["quiet-when-nothing-changed"])
+        self.assertEqual(sorted(c for c, (ok, _) in results.items() if not ok), ["no-write-attempt", "quiet-when-nothing-changed"])
         # Q7: reminded-update, the agent writes the tracker by hand without timestamps, reply ''
         by_hand = moved(tracker("stale-task"), {2: "done"})
         by_hand["items"][1].pop("finished")
@@ -548,9 +793,33 @@ class AgentCompleted(unittest.TestCase):
             self.assertIn("snapshot", results["agent-completed"][1])
 
 
+class Soft(unittest.TestCase):
+    def test_the_prose_check_is_the_only_soft_check(self):
+        self.assertEqual({c for c, g in checks.GROUPS.items() if g == "soft"}, {"reply-names-current"})
+
+    def test_a_wrong_reply_alone_is_a_pass_with_a_warning(self):
+        for reply in ("Here is the tracker.", "Storage layer is done."):
+            row, events, states = helpers.good("show", reply=reply)
+            trial = run_evals.grade_trial(row, events, states)
+            self.assertEqual(trial["verdict"], "PASS", reply)
+            self.assertEqual(trial["warnings"], ["reply-names-current"], reply)
+            self.assertFalse(next(c for c in trial["checks"] if c["id"] == "reply-names-current")["pass"])
+
+    def test_a_clean_run_has_no_warning(self):
+        row, events, states = helpers.good("show")
+        self.assertEqual(run_evals.grade_trial(row, events, states)["warnings"], [])
+
+    def test_a_warning_never_masks_or_makes_a_failure(self):
+        row, events, states = helpers.good("show", reply="Here is the tracker.", after_tracker=moved(T, {2: "done"}))
+        trial = run_evals.grade_trial(row, events, states)
+        self.assertEqual((trial["verdict"], trial["warnings"]), ("FAIL", ["reply-names-current"]))
+        row, events, states = helpers.good("show", reply="Here is the tracker.", entries=[INLINE, INSTALLED])
+        self.assertEqual(run_evals.grade_trial(row, events, states)["verdict"], "INCONCLUSIVE")
+
+
 class Groups(unittest.TestCase):
     def test_every_group_is_used_and_known(self):
-        self.assertEqual(set(checks.GROUPS.values()), {"precondition", "process", "gate", "outcome"})
+        self.assertEqual(set(checks.GROUPS.values()), {"precondition", "process", "gate", "outcome", "soft"})
 
 
 if __name__ == "__main__":

@@ -13,7 +13,9 @@ cases/cases.csv columns:
     want      what the tracker must hold afterwards, comma separated tokens (empty for show, none and reminded-quiet):
                 ID=STATE         item ID has that state (done, doing, todo, blocked)
                 ID.needs=set     item ID has a non-empty `needs`
-                ID.needs=you     item ID's `needs` names the user: starts with you, author, me or user (the prompt says "waiting on me")
+                ID.needs=you     item ID's `needs` is exactly "you" or "author" (case aside): the values that set the statusline flag, as the
+                                 plugin's own is_you() reads them; "me", "user" or "you (the key from legal)" do not (the prompt says
+                                 "waiting on me")
                 title=TEXT       the tracker's title
                 count=N          the number of items
                 names=a|b|c      every word occurs in some item name (case-insensitive)

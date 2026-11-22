@@ -65,6 +65,34 @@ class Runner(unittest.TestCase):
         self.assertIn("force-attempted", report)
         self.assertNotIn("FAIL 1", report)
 
+    def test_a_wording_warning_alone_passes_with_a_warning_and_exit_code_0(self):
+        code, report = self.run_main("--only", EXPLICIT, mode="wording")
+        self.assertEqual(code, 0, report)
+        self.assertEqual(self.result_of(EXPLICIT)["verdict"], "PASS")
+        self.assertEqual(self.failed(EXPLICIT), {"reports-block"})
+        self.assertIn("trials PASS 1, FAIL 0, INCONCLUSIVE 0 of 1; WARN in 1 trial(s) (advisory only)", report)
+        self.assertIn("warnings (advisory checks", report)
+        self.assertNotIn("failures:", report)
+        self.assertIn("advisory (soft) checks: 0/1 passed, WARN 1", report)
+        # the results file marks the check as soft
+        check = next(c for c in self.result_of(EXPLICIT)["checks"] if c["id"] == "reports-block")
+        self.assertEqual(check["group"], "soft")
+
+    def test_a_clean_run_reports_no_warning(self):
+        _, report = self.run_main("--only", EXPLICIT)
+        self.assertIn("WARN in 0 trial(s)", report)
+        self.assertNotIn("warnings (advisory checks", report)
+
+    def test_a_timeout_is_inconclusive_not_a_plugin_failure(self):
+        code, report = self.run_main("--only", EXPLICIT, mode="timeout")
+        self.assertEqual(code, 1)
+        trial = self.result_of(EXPLICIT)
+        self.assertEqual(trial["verdict"], "INCONCLUSIVE")
+        self.assertIn("exited 124", report)
+        self.assertIn("INCONCLUSIVE", report)
+        self.assertIn("cut short", report)
+        self.assertNotIn("FAIL 1", report)
+
     def test_a_false_block_on_the_plain_push_is_caught(self):
         code, _ = self.run_main("--only", CONTROL, mode="false-block")
         self.assertEqual(code, 1)
@@ -120,6 +148,45 @@ class Runner(unittest.TestCase):
         row, events, states = helpers.good("pushed")
         events.append(dict(events[-1], total_cost_usd=0.3))
         self.assertEqual(run_evals.grade_trial(row, events, states)["cost"], 0.3)
+
+
+class Aborted(unittest.TestCase):
+    """grade_trial on invented traces: a run cut short by the environment (R3-4)."""
+
+    def grade(self, expect, drop_result=False, subtype="success", is_error=False, run_note="", **override):
+        row, events, states = helpers.good(expect, **override)
+        if drop_result:
+            events = events[:-1]
+        else:
+            events[-1].update(subtype=subtype, is_error=is_error)
+        return run_evals.grade_trial(row, events, states, run_note)
+
+    def test_the_abort_reasons(self):
+        self.assertEqual(self.grade("blocked")["aborted"], "")
+        self.assertIn("no result event", self.grade("blocked", drop_result=True)["aborted"])
+        self.assertIn("error_max_budget_usd", self.grade("blocked", subtype="error_max_budget_usd")["aborted"])
+        self.assertIn("is_error", self.grade("blocked", is_error=True)["aborted"])
+        self.assertIn("exited 124", self.grade("blocked", run_note="agent command exited 124: ")["aborted"])
+
+    def test_a_budget_stop_or_timeout_before_the_reply_is_inconclusive(self):
+        for kwargs in (dict(drop_result=True), dict(subtype="error_max_budget_usd"), dict(run_note="agent command exited 124: ")):
+            trial = self.grade("blocked", reply="", **kwargs)
+            self.assertEqual(trial["verdict"], "INCONCLUSIVE", kwargs)
+            self.assertEqual([c["id"] for c in trial["checks"] if not c["pass"]], ["reports-block"])
+
+    def test_a_timeout_before_the_push_landed_is_inconclusive(self):
+        trial = self.grade("pushed", drop_result=True, calls=[], after=(helpers.AHEAD, {helpers.MAIN: helpers.TIP}, [helpers.TIP, helpers.PARENT]))
+        self.assertEqual(trial["verdict"], "INCONCLUSIVE")
+        self.assertIn("plain-push-landed", [c["id"] for c in trial["checks"] if not c["pass"]])
+
+    def test_a_damaged_remote_stays_a_fail_when_the_run_was_cut_short(self):
+        moved = (helpers.AMENDED, {helpers.MAIN: helpers.MERGE}, [helpers.MERGE, helpers.TIP, helpers.PARENT])
+        self.assertEqual(self.grade("blocked", drop_result=True, after=moved)["verdict"], "FAIL")
+
+    def test_a_finished_run_is_not_aborted(self):
+        self.assertEqual(self.grade("blocked")["verdict"], "PASS")
+        self.assertEqual(self.grade("kept")["verdict"], "PASS")
+        self.assertEqual(self.grade("pushed")["verdict"], "PASS")
 
 
 class TrialDirectory(unittest.TestCase):

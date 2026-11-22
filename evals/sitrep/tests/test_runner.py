@@ -24,15 +24,17 @@ AGENT = f"{shlex.quote(sys.executable)} {shlex.quote(str(HERE / 'stub_agent.py')
 # mode -> {case id: (verdict, exactly the checks that fail)}; a case that is not listed passes
 MODES = {
     "writes-into-project": {"r1": ("FAIL", {"project-untouched"}), "m1": ("FAIL", {"project-untouched"}), "f1": ("FAIL", {"project-untouched"})},
-    "bad-data": {"r1": ("FAIL", {"data-parses", "data-valid", "items-cover-planted", "dependency-recorded", "start-here-set"}),
-                 "m1": ("FAIL", {"data-parses", "data-valid", "items-cover-planted", "dependency-recorded", "start-here-set", "milestone-item", "milestone-strip"})},
+    "bad-data": {"r1": ("FAIL", {"data-parses", "data-valid", "items-cover-planted", "dependency-recorded", "dependency-direction", "start-here-set"}),
+                 "m1": ("FAIL", {"data-parses", "data-valid", "items-cover-planted", "dependency-recorded", "dependency-direction", "start-here-set",
+                                 "milestone-item", "milestone-strip", "milestone-current"})},
     "edits-index": {"r1": ("FAIL", {"index-untouched"}), "m1": ("FAIL", {"index-untouched"})},
-    "misses-items": {"r1": ("FAIL", {"items-cover-planted", "dependency-recorded"}), "m1": ("FAIL", {"items-cover-planted", "dependency-recorded", "milestone-item"})},
+    "misses-items": {"r1": ("FAIL", {"items-cover-planted", "dependency-recorded", "dependency-direction"}),
+                     "m1": ("FAIL", {"items-cover-planted", "dependency-recorded", "dependency-direction", "milestone-item"})},
     "rm-instead-of-clean": {"r1": ("FAIL", {"cleaned-by-script"})},
     "leaves-report": {"r1": ("FAIL", {"cleaned-by-script", "report-cleaned"})},
 }
 NO_REPORT_FAILS = {"created-by-script", "report-outside-project", "index-untouched", "only-data-added", "data-defines-sitrep",
-                   "data-parses", "data-valid", "items-cover-planted", "dependency-recorded", "start-here-set", "reply-hands-over"}
+                   "data-parses", "data-valid", "items-cover-planted", "dependency-recorded", "dependency-direction", "start-here-set", "reply-hands-over"}
 
 
 class Runner(unittest.TestCase):
@@ -73,6 +75,20 @@ class Runner(unittest.TestCase):
                 self.assertEqual(code, 1, report)
                 want = {case: expected.get(case, ("PASS", set())) for case in ("r1", "m1", "f1", "n1")}
                 self.assertEqual(self.trials(), want, report)
+
+    def test_a_reply_that_pastes_the_list_is_a_warning_not_a_failure(self):
+        code, report = self.run_main(mode="pastes-list")
+        self.assertEqual(code, 0, report)
+        self.assertEqual(self.trials(), {case: ("PASS", {"reply-hands-over"} if case in ("r1", "m1") else set()) for case in ("r1", "m1", "f1", "n1")})
+        self.assertIn("[WARN]: reply-hands-over", report)
+        self.assertIn("WARN (advisory, not in the verdict) on 2 trial(s)", report)
+        self.assertIn("cases passed 4/4", report)
+        self.assertIn("soft 5/7", report)
+        prompts = {p["id"]: p["trials"][0] for p in json.loads((self.out / "results.json").read_text())["prompts"]}
+        self.assertEqual((prompts["r1"]["warnings"], prompts["r1"]["verdict"], prompts["n1"]["warnings"]), (["reply-hands-over"], "PASS", []))
+        self.assertEqual({c["group"] for c in prompts["r1"]["checks"] if c["id"] == "reply-hands-over"}, {"soft"})
+        stream = io.StringIO()
+        self.assertEqual(run_evals.main(["--cases", str(self.csv), "--fixtures", str(self.out)], stream), 0, stream.getvalue())
 
     def test_an_agent_that_calls_the_skill_but_builds_no_report_fails_the_skill(self):
         code, report = self.run_main(mode="no-report")

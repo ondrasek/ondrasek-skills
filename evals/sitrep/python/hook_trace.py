@@ -7,7 +7,8 @@ Shapes used, and where they are known from:
     user event    {"message": {"content": [{"type": "tool_result", "tool_use_id": "...", "content": <string or list of blocks>}]}}
                   the string form is seen for the Skill tool; the shape of a Bash result is not evidenced, both forms are read
     result        "permission_denials": [...]                                              seen, always empty so far: the element shape
-                  is undocumented, so elements are kept as raw dicts and matched on tool_name and on their JSON text
+                  is undocumented, so elements are kept as raw dicts; checks.denial_kinds reads tool_name and tool_input when they are there
+                  and otherwise looks at the element's strings (a report.sh call, or a string that is only a data.js path)
 """
 import json
 

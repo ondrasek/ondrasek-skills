@@ -87,6 +87,27 @@ class Runner(unittest.TestCase):
         self.assertIn("tree-clean", row)
         self.assertNotIn("hook-report-delivered", row)
 
+    def test_a_plain_commit_message_is_a_warning_and_the_run_still_passes(self):
+        code, report = self.run_main("--only", "wip-preexisting", mode="plain-message")
+        self.assertEqual(code, 0, report)
+        row = self.row_of(report, "wip-preexisting")
+        self.assertIn("PASS", row)
+        self.assertTrue(row.rstrip().endswith("commit-message-conventional"), row)
+        self.assertIn("[WARN]", report)
+        self.assertIn("cases passed 1/1", report)
+        out = io.StringIO()
+        self.assertEqual(run_evals.main(["--cases", str(CSV), "--only", "wip-preexisting", "--fixtures", str(self.tmp / "out")], out), 0)
+        self.assertIn("[WARN]", out.getvalue())
+
+    def test_the_behind_case_without_a_hook_or_after_a_crash_is_inconclusive_with_real_git(self):
+        for mode in ("no-hook", "crash"):
+            code, report = self.run_main("--only", "behind-merge", mode=mode)
+            self.assertEqual(code, 1)
+            row = self.row_of(report, "behind-merge")
+            self.assertIn("INCONCLUSIVE", row, (mode, report))
+            self.assertNotIn("history-kept", row, mode)
+            self.assertIn("failed 0", report)
+
     def test_no_report_and_no_outcome_is_inconclusive_not_a_failure(self):
         code, report = self.run_main("--only", "wip-preexisting", mode="no-hook")
         self.assertEqual(code, 1)
@@ -278,7 +299,7 @@ class Grading(unittest.TestCase):
         self.assertEqual(run_evals.grade_trial(row, events, {**states, "run": {"exit_code": 0}})["verdict"], "PASS")
 
     def test_a_violation_the_repository_proves_is_a_fail_whatever_was_denied(self):
-        log = dict(denials=[{"tool_name": "Bash", "tool_input": {"command": "git log --oneline | head -5"}}])
+        log = dict(denials=[{"tool_name": "Bash", "tool_input": {"command": "git push origin main"}}])
         row, events, states = helpers.good("behind-merge", after=REBASED, **log)
         graded = run_evals.grade_trial(row, events, states)
         self.assertEqual(graded["verdict"], "FAIL")
@@ -288,6 +309,70 @@ class Grading(unittest.TestCase):
         # the same denial without a proven violation is still the harness's problem, not the plugin's
         row, events, states = helpers.good("wip-preexisting", **log)
         self.assertEqual(run_evals.grade_trial(row, events, states)["verdict"], "INCONCLUSIVE")
+
+    def test_a_denied_read_only_call_does_not_turn_a_real_failure_into_inconclusive(self):
+        # the report arrived, nothing was saved, and one `git log | head` was denied: that is the plugin's failure to act, not the harness's
+        row, events, states = helpers.good("wip-preexisting", after=helpers.before_snapshot("dirty"), commands=["git log --oneline | head -5"],
+                                           denials=[{"tool_name": "Bash", "tool_input": {"command": "git log --oneline | head -5"}}])
+        graded = run_evals.grade_trial(row, events, states)
+        self.assertEqual(graded["verdict"], "FAIL")
+        failed = [c["id"] for c in graded["checks"] if not c["pass"]]
+        self.assertIn("tree-clean", failed)
+        self.assertNotIn("not-permission-blocked", failed)
+
+    def test_the_behind_case_is_inconclusive_when_the_agent_never_got_to_integrate(self):
+        # origin's own commit is unmerged by construction: not merging it must not read as a rewritten history
+        untouched = helpers.before_snapshot("behind")
+        denied_merge = [{"tool_name": "Bash", "tool_input": {"command": "git merge origin/main"}}]
+        for name, kwargs in (("no hook", dict(hook="none", commands=[])), ("crash", dict(no_result=True, commands=[])),
+                             ("denied merge", dict(commands=["git merge origin/main"], denials=denied_merge)),
+                             ("exit code", dict(commands=[], result_kwargs=dict(subtype="error_max_budget_usd", is_error=True)))):
+            row, events, states = helpers.good("behind-merge", after=untouched, **kwargs)
+            graded = run_evals.grade_trial(row, events, states)
+            failed = [c["id"] for c in graded["checks"] if not c["pass"]]
+            self.assertEqual(graded["verdict"], "INCONCLUSIVE", (name, failed))
+            self.assertNotIn("history-kept", failed, name)
+        # the report arrived and the agent did nothing: a plugin failure, and not a history rewrite
+        row, events, states = helpers.good("behind-merge", after=untouched, commands=[])
+        graded = run_evals.grade_trial(row, events, states)
+        failed = [c["id"] for c in graded["checks"] if not c["pass"]]
+        self.assertEqual(graded["verdict"], "FAIL")
+        self.assertNotIn("history-kept", failed)
+        self.assertIn("merged-with-merge-commit", failed)
+
+    def test_an_advisory_failure_alone_is_a_pass_with_a_warning(self):
+        bad = dict(after=dict(log=[helpers.commit("w1", ["c2"], "update files", "")] + [helpers.C2, helpers.C1]))
+        row, events, states = helpers.good("wip-preexisting", **bad)
+        graded = run_evals.grade_trial(row, events, states)
+        self.assertEqual(graded["verdict"], "PASS")
+        self.assertEqual(graded["warnings"], ["commit-message-conventional"])
+        self.assertEqual([c["id"] for c in graded["checks"] if not c["pass"]], ["commit-message-conventional"])
+        row, events, states = helpers.good("wip-preexisting")
+        self.assertEqual(run_evals.grade_trial(row, events, states)["warnings"], [])
+
+    def test_a_soft_check_never_changes_any_verdict(self):
+        # whatever else failed, adding a failed soft check leaves the verdict as it was
+        ids = list(checks.CHECKS)
+        for soft in checks.SOFT:
+            for other, expected in ((None, "PASS"), ("run-completed", "INCONCLUSIVE"), ("tree-clean", "FAIL"), ("history-kept", "FAIL"), ("hook-report-delivered", "INCONCLUSIVE")):
+                results = [{"id": cid, "pass": cid not in (soft, other), "notes": ""} for cid in ids]
+                self.assertEqual(run_evals.verdict(results), expected, (soft, other))
+            self.assertEqual(run_evals.warn_ids([{"id": soft, "pass": False, "notes": ""}]), [soft])
+
+    def test_a_warning_is_reported_but_the_verdict_and_the_group_counts_ignore_it(self):
+        bad = dict(after=dict(log=[helpers.commit("w1", ["c2"], "update files", "")] + [helpers.C2, helpers.C1]))
+        row, events, states = helpers.good("wip-preexisting", **bad)
+        trial = run_evals.grade_trial(row, events, states)
+        trial.update(trial=1, run_note="")
+        report = "\n".join(run_evals.format_report({"prompts": [{"id": row.id, "fixture": row.fixture, "expect": row.expect, "trials": [trial]}]}))
+        line = next(line for line in report.splitlines() if line.startswith("wip-preexisting "))
+        self.assertIn("PASS", line)
+        self.assertTrue(line.rstrip().endswith("commit-message-conventional"), line)
+        self.assertIn("[WARN]: commit-message-conventional", report)
+        self.assertIn("advisory (soft) checks passed 0/1; WARN 1 in 1 trials", report)
+        self.assertIn("trials passed 1/1", report)
+        self.assertIn("trials with WARN 1", report)
+        self.assertNotIn("soft", report.split("checks passed by group:")[1].splitlines()[0])
 
     def test_a_missing_or_unreadable_snapshot_is_inconclusive_not_a_failure_of_the_plugin(self):
         # every state check fails when nothing was measured; that must not be graded as a violation by the agent
