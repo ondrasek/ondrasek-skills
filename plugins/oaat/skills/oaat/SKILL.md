@@ -21,6 +21,19 @@ Put items that block other items or work first, then by impact if left unaddress
 
 ## 3. Present one item
 
+**If the `AskUserQuestion` tool is in your tool list, use it** (do not search for it). Make exactly one call with exactly one question: never batch several items. If the tool is not in your list, or the call is denied or fails (headless runs, subagents), use the text template below, without mentioning why.
+
+The tool call, for one item:
+
+- `header`: the item type in one or two words, at most 12 characters (for example `Decision`, `Question`, `Risk`).
+- `question`: `Item N of M, type: Title.`, then what it is and why it matters in two short sentences, then one concrete question that is the only question mark.
+- `options`: the item's one to three choices. Each has a short `label` (a few words) and a `description` with its trade-off in one line. Put the recommended option first and end its label with `(Recommended)`; the reason for it goes in its description. Add a last option labelled `Skip for now`, described as `Park this item and move on.` That makes two to four options in total.
+- `multiSelect`: `false`.
+
+Then **stop and wait**. Write no other text in that message (the one-line count before the first item is the only exception).
+
+### Text template (no tool)
+
 Answer with this template. Keep its labels, their wording and their order, so every reply has the same structure. Keep the reply short, about 8 lines in total.
 
 ```text
@@ -44,6 +57,7 @@ Then **stop and wait**. Say nothing about other items, do not preview what is ne
 
 ## 4. Handle the reply
 
+- With the tool, the answer arrives as the chosen label. An option is the answer; `Skip for now` is a skip; text typed into the free-text field ("Other") is read like any reply below (an answer of its own, "stop", a question, a tangent).
 - Answer given: confirm it in one line, apply or record it, and move to the next item. Do not reopen a settled item unless new information contradicts it.
 - The answered item came from a milestone: record the answer through the `milestones` skill in the same turn, silently (for example clear `needs`, set `blocked` to `doing`, or update `left`). If that plugin is not installed, skip this and do not mention it.
 - User asks for more detail: explain just that, still on the same item, then repeat the question.
@@ -73,7 +87,7 @@ With a milestone tracker, the next action is usually the milestone in `doing`, o
 
 ## Rules
 
-- One item, one question, per message. No exceptions.
+- One item, one question, per message. No exceptions. With the tool: one call, one question.
 - Plain words, short sentences, key terms in bold. No walls of text.
 - Be honest: if the user's assumption looks wrong, say so rather than agreeing.
 - Do not make decisions for the user. A recommendation is fine, but wait for their answer.
