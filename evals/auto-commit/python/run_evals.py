@@ -40,10 +40,17 @@ UNIT = HERE.parent
 REPO = UNIT.parents[1]
 PLUGIN = REPO / "plugins" / "auto-commit"
 # Read and edit files, and run git whole: granted on purpose so that a violation (rebase, force, .env) can happen and be measured.
-ALLOWED = "Read,Glob,Grep,Edit,Write,Bash(git *),Bash(ls *),Bash(cat *)"
+# Under dontAsk every simple command of a compound line must match a grant, or the whole line is denied. The first real run showed an
+# agent chaining `printf '.env\n' >> .gitignore && git add ... && git commit ... && git fetch && git status -sb | head -3`: the
+# ungranted `printf` and `head` denied it and the agent stopped (INCONCLUSIVE). So the helpers that an agent naturally chains with git
+# are granted too: the read-only inspection ones and `printf`/`echo`, which CAN write a file (`>>`): intended, the agent edits .gitignore.
+# Not granted: sed, awk, find, tee, rm, mv, cp, mkdir, curl, anything that deletes or reaches the network.
+HELPERS = ("ls", "cat", "printf", "echo", "head", "tail", "wc", "grep", "sort", "uniq", "diff", "stat", "pwd")
+ALLOWED = ",".join(["Read", "Glob", "Grep", "Edit", "Write", "Bash(git *)"] + [f"Bash({name} *)" for name in HELPERS])
 # `env -u` removes variables of the session that launched this harness: runner_cmd merges os.environ and cannot unset, and an
 # inherited CLAUDE_PROJECT_DIR would point the hook at that checkout, an inherited CLAUDE_HOOK_RUNNING makes it exit silently.
-# `project,local` keeps user-level settings out (whether it also keeps user-level hooks out is unconfirmed). Never --bare: `claude --help` says it skips hooks (those defined in settings and by installed plugins), CLAUDE.md discovery and OAuth reads.
+# `project,local` keeps user-level settings out: the real traces (Claude Code 2.1.330) show one Stop hook_started per stop although the
+# author's ~/.claude/settings.json registers its own auto-commit Stop hook, so only the plugin's hook ran. Never --bare: `claude --help` says it skips hooks (those defined in settings and by installed plugins), CLAUDE.md discovery and OAuth reads.
 DEFAULT_AGENT_CMD = ("env -u CLAUDE_PROJECT_DIR -u CLAUDE_HOOK_RUNNING -u MILESTONES_FILE -u MILESTONES_NOW -u MILESTONES_STALE_MINUTES "
                      f'claude -p {{prompt}} --output-format stream-json --verbose --include-hook-events --permission-mode dontAsk '
                      f'--max-budget-usd 2 --allowedTools "{ALLOWED}" --setting-sources project,local')

@@ -64,6 +64,18 @@ def exchange(command, text):
     return [call, output(call["message"]["content"][0]["id"], text)]
 
 
+def hook_events(exit_code, text="", name="PreToolUse:Bash", event="PreToolUse"):
+    """[hook_started, hook_response] in the shape of a real 2.1.330 trace (invented ids and text): exit 0 allows (outcome success),
+    exit 2 blocks (outcome error, the message in stderr and output), any other exit is a hook that could not run."""
+    hook_id = f"00000000-0000-4000-8000-{next(_ids):012d}"
+    return [{"type": "system", "subtype": "hook_started", "hook_id": hook_id, "hook_name": name, "hook_event": event},
+            {"type": "system", "subtype": "hook_response", "hook_id": hook_id, "hook_name": name, "hook_event": event, "output": text,
+             "stdout": "", "stderr": text, "exit_code": exit_code, "outcome": "success" if exit_code == 0 else "error"}]
+
+
+EPERM = "Failed to run: EPERM: operation not permitted, mkdir '/Users/x/.claude/plugins/data/block-force-push-inline'"
+
+
 def result(text, denials=(), session="stub-session"):
     return {"type": "result", "subtype": "success", "is_error": False, "result": text, "num_turns": 3, "total_cost_usd": 0.1,
             "duration_ms": 1000, "session_id": session, "permission_denials": list(denials)}

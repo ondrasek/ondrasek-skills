@@ -240,6 +240,18 @@ class AgentCommand(unittest.TestCase):
         self.assertEqual(tokens[tokens.index("--allowedTools") + 1], run_evals.ALLOWED)
         self.assertTrue((run_evals.PLUGIN / ".claude-plugin" / "plugin.json").is_file())
 
+    def test_the_grant_covers_the_helpers_an_agent_chains_with_git(self):
+        # the first real run: `printf '.env\n' >> .gitignore && git add ... && git fetch -q && git status -sb | head -3` was denied by dontAsk
+        granted = run_evals.ALLOWED.split(",")
+        for name in ("Read", "Glob", "Grep", "Edit", "Write", "Bash(git *)"):
+            self.assertIn(name, granted)
+        for helper in ("ls", "cat", "printf", "echo", "head", "tail", "wc", "grep", "sort", "uniq", "diff", "stat", "pwd"):
+            self.assertIn(f"Bash({helper} *)", granted)
+        # nothing that deletes, rewrites in place or reaches the network
+        for helper in ("rm", "mv", "cp", "sed", "awk", "find", "tee", "mkdir", "curl", "bash", "sh", "xargs", "env"):
+            self.assertNotIn(f"Bash({helper} *)", granted)
+        self.assertEqual(len(granted), len(set(granted)))
+
     def test_the_agent_gets_the_plugin_the_remote_and_a_git_that_ignores_global_config(self):
         row = helpers.ROWS["behind-merge"]
         args = run_evals.parse_args(["--agent-cmd", run_evals.DEFAULT_AGENT_CMD])
@@ -423,6 +435,20 @@ class Grading(unittest.TestCase):
         self.assertEqual([c["id"] for c in graded["checks"] if not c["pass"]], ["hook-report-delivered"])
         row, events, states = helpers.good("behind-merge", hook="event-only", after=REBASED)
         events.insert(2, helpers.hook_event())
+        self.assertEqual(run_evals.grade_trial(row, events, states)["verdict"], "FAIL")
+
+    def test_a_stop_hook_infrastructure_error_is_inconclusive_with_the_error_text_unless_a_violation_is_proven(self):
+        row, events, states = helpers.good("wip-preexisting", hook="none")
+        events.insert(1, helpers.hook_infra_error())
+        graded = run_evals.grade_trial(row, events, states)
+        self.assertEqual(graded["verdict"], "INCONCLUSIVE")
+        self.assertEqual([c["id"] for c in graded["checks"] if not c["pass"]], ["hook-report-delivered"])
+        trial = dict(graded, trial=1, run_note="")
+        report = "\n".join(run_evals.format_report({"prompts": [{"id": row.id, "fixture": row.fixture, "expect": row.expect, "trials": [trial]}]}))
+        self.assertIn("[INCONCLUSIVE]: hook-report-delivered: infrastructure error", report)
+        self.assertIn("EPERM: operation not permitted", report)
+        row, events, states = helpers.good("wip-preexisting", hook="none", commands=helpers.COMMANDS + ["git stash"])
+        events.insert(1, helpers.hook_infra_error())
         self.assertEqual(run_evals.grade_trial(row, events, states)["verdict"], "FAIL")
 
     def test_a_denial_that_only_mentions_git_does_not_spoil_a_good_run(self):

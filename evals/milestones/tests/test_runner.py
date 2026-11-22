@@ -267,10 +267,17 @@ class Grading(unittest.TestCase):
         self.assertEqual(tokens[tokens.index("--max-budget-usd") + 1], "2")
         self.assertLess(tokens.index("{prompt}"), tokens.index("--allowedTools"))
         allowed = tokens[tokens.index("--allowedTools") + 1]
-        # both spellings: the skill calls the script with a quoted absolute path, so the closing quote comes before the verb
-        # (the first real run was denied under the unquoted pattern alone)
-        for grant in ("Skill", "Read", "Edit", "Write", "Bash(python3 *milestones.py *)", 'Bash(python3 *milestones.py" *)'):
-            self.assertIn(grant, allowed.split(","))
+        # the narrow script spellings (a quoted absolute path puts the closing quote before the verb), plus the whole of python3 and the
+        # variable assignment: the real runs called `S="/abs/milestones.py"; python3 "$S" set ... && python3 "$S" show`, which no
+        # path-shaped pattern matches; and the read-only helpers an agent chains
+        grants = allowed.split(",")
+        for grant in ("Skill", "Read", "Edit", "Write", "Bash(python3 *milestones.py *)", 'Bash(python3 *milestones.py" *)', "Bash(python3 *)", "Bash(S=*)",
+                      "Bash(git log *)", "Bash(git diff *)", "Bash(git check-ignore *)", "Bash(head *)", "Bash(tail *)", "Bash(wc *)", "Bash(grep *)",
+                      "Bash(git add *)", "Bash(git commit *)"):
+            self.assertIn(grant, grants)
+        # nothing broader than that: no bare Bash, no shell, no network or file-deleting tool
+        for broad in ("Bash", "Bash(*)", "Bash(bash *)", "Bash(sh *)", "Bash(curl *)", "Bash(rm *)", "Bash(git push *)"):
+            self.assertNotIn(broad, grants)
         # --allowedTools takes a list: the next token must be a flag, or it would swallow the appended --plugin-dir
         self.assertTrue(tokens[tokens.index("--allowedTools") + 2].startswith("--"))
         built = run_evals.runner_cmd.build(run_evals.DEFAULT_AGENT_CMD, "the prompt", ["--plugin-dir", "P"])

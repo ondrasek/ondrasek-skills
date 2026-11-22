@@ -5,10 +5,17 @@ system/init carries `plugins` as [{"name": "oaat", "source": "oaat@inline", "pat
 `permission_denials` (a list, empty in the recorded runs); a Bash tool_use has input {"command": ...}; a tool_result block is {"tool_use_id", "content": str} in a user event (`is_error` is
 assumed to be set on a failed call: unconfirmed).
 
-UNCONFIRMED (no recorded trace has them, because those runs did not pass --include-hook-events and never hit a denial): the exact
-fields of a `hook_response` system event, the shape of an element of `permission_denials`, a system `permission_denied` event, and
-how the report of a blocking Stop hook reaches the conversation. Every function below therefore matches on text or tolerates a
-missing field rather than on a documented schema, and the checks that depend on them grade as INCONCLUSIVE, not FAIL.
+CONFIRMED in the first real run (Claude Code 2.1.330, 2026-11-22, --include-hook-events): a hook emits
+{"type": "system", "subtype": "hook_started", "hook_name": "Stop", "hook_event": "Stop", ...} and then {"type": "system", "subtype":
+"hook_response", "hook_name", "hook_event", "output", "stdout", "stderr", "exit_code": N, "outcome": "success" | "error"}. A Stop hook
+that fires and asks for work exits 2 with outcome 'error': that is the hook doing its job, not an infrastructure error. An
+INFRASTRUCTURE error has an exit code outside (0, 2), e.g. exit_code 1, outcome 'error', output "Failed to run: EPERM: operation not
+permitted, mkdir '.../.claude/plugins/data/milestones-inline'" (seen when Claude Code itself ran inside a sandbox); the hook never ran,
+so it cannot be blamed (hook_errors).
+
+STILL UNCONFIRMED: the shape of an element of `permission_denials` and of a system `permission_denied` event, the `is_error` flag of a
+failed Bash tool_result. The code matches on text or tolerates a missing field there, and the checks that depend on them grade as
+INCONCLUSIVE, not FAIL.
 """
 import json
 
@@ -46,6 +53,21 @@ def hook_responses(events, hook_event=None):
     if hook_event is None:
         return found
     return [e for e in found if str(e.get("hook_event", "")).lower() == hook_event.lower()]
+
+
+def hook_errors(events):
+    """[(hook event, exit code, text)] of the hook_response events that are an INFRASTRUCTURE error: an exit code outside (0, 2), or no
+    exit code and outcome 'error'. Exit code 2 (a Stop hook asking for work, outcome 'error' too) and 0 are not errors. The text is the
+    first non-empty of output, stderr, stdout."""
+    found = []
+    for e in hook_responses(events):
+        code = e.get("exit_code")
+        if isinstance(code, bool) or not (isinstance(code, int) or code is None):
+            code = None
+        if (code is not None and code not in (0, 2)) or (code is None and e.get("outcome") == "error"):
+            text = next((str(e[k]).strip() for k in ("output", "stderr", "stdout") if str(e.get(k) or "").strip()), "")
+            found.append((str(e.get("hook_event") or e.get("hook_name") or "?"), code, text))
+    return found
 
 
 def bash_commands(events):

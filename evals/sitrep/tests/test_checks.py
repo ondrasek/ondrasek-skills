@@ -129,6 +129,16 @@ GONE = helpers.state.report_record(DIR, None, helpers.TEMPLATE_SHA, "trace, but 
 REFUSED_CLEAN = [("Bash", {"command": f"{SCRIPT_Q} clean {DIR}/"}, "refusing to delete: " + DIR + "/\n"), ("Bash", {"command": 'rm -rf "$TMPDIR"/sitrep.*'}, "")]
 SPOKEN_SUMMARY = (f"The report is at {DIR}/index.html. 5 open items: 2 decisions (Postgres vs SQLite, SSO vendor), 1 risk (licence audit), "
                   "1 question (retention), 1 blocker (schema migration). Start with the database decision. Press Copy JSON to send your comments back.")
+# The real with-milestones shape (invented text, not the recorded trace): ONE compound exploration command, denied as a whole under dontAsk
+# because `git log` and `head` were not granted; the agent then read files, never ran report.sh and answered in text
+EXPLORE = "ls -la . .cache 2>&1; cat .cache/milestones.json 2>&1; git log --oneline | head; cat /p/skills/sitrep/schema.md"
+DONTASK = ("Permission to use Bash has been denied because Claude Code is running in don't ask mode. IMPORTANT: You *may* attempt to "
+           "accomplish this action using other tools that might naturally be used to accomplish this goal.")
+STOPPED_CALLS = [("Skill", {"skill": SKILL}), ("Bash", {"command": EXPLORE}, DONTASK), ("Read", {"file_path": "/r/ws/.cache/milestones.json"})]
+STOPPED = dict(calls1=STOPPED_CALLS, report_found=False, tmp_sitrep=[])
+EXPLORE_DENIAL = [{"tool_name": "Bash", "tool_use_id": "toolu_x", "tool_input": {"command": EXPLORE}}]
+# everything that reads the report or the milestone mapping fails with it (report.sh never ran, so there is no report)
+STOPPED_CASCADE = NO_REPORT | {"milestone-item", "milestone-strip", "milestone-current"}
 # (label, check id, expect, override, cascade): further failing runs of a check, the reviewer's and the ones a check was fixed for
 MORE_MUTATIONS = [
     ("a turn that ends in an error result", "run-completed", "feedback", dict(result_subtype="error_during_execution"), set()),
@@ -163,6 +173,9 @@ MORE_MUTATIONS = [
      dict(calls1=[("Skill", {"skill": SKILL}), ("Bash", {"command": "cd /x && '/home/u/.claude/plugins/sitrep/skills/sitrep/scripts/report.sh' new"}, DIR + "\n"), REPORT_CALLS[2]]), set()),
     ("two plugins named sitrep", "skill-loaded", "report", dict(plugins=("sitrep", "sitrep")), set()),
     ("the sitrep plugin loaded from another path", "skill-loaded", "report", dict(plugin_path="/installed/sitrep"), set()),
+    ("a compound exploration command denied (dontAsk text in the tool_result) and report.sh new never tried", "not-permission-blocked", "report-ms", STOPPED, STOPPED_CASCADE),
+    ("the same denial recorded only in result.permission_denials, with a command that reads as a success", "not-permission-blocked", "report-ms",
+     dict(calls1=[("Skill", {"skill": SKILL}), ("Bash", {"command": EXPLORE}, "")], denials=EXPLORE_DENIAL, report_found=False, tmp_sitrep=[]), STOPPED_CASCADE),
     ("report.sh run from outside the plugin under test", "skill-loaded", "report",
      dict(calls1=[("Skill", {"skill": SKILL}), ("Bash", {"command": '"/installed/sitrep/skills/sitrep/scripts/report.sh" new'}, DIR + "\n"), REPORT_CALLS[2]]), set()),
 ]
@@ -509,6 +522,77 @@ class Precondition(unittest.TestCase):
 
     def test_the_report_must_exist(self):
         self.assertFalse(passes("report-located", report_patch={"exists": False}))
+
+
+class DeniedExploration(unittest.TestCase):
+    """The first real with-milestones run: the harness's own grants denied the agent's exploration, so report.sh new was never exercised."""
+
+    def stopped(self, **override):
+        return helpers.good("report-ms", **{**STOPPED, **override})
+
+    def case(self, **override):
+        row, events, states = self.stopped(**override)
+        return checks.Case.build(row, events, states)
+
+    def test_the_real_shape_is_inconclusive_not_a_failure_and_names_the_denied_command(self):
+        case = self.case()
+        results = checks.run_checks(case)
+        self.assertEqual(checks.verdict(case, results), "INCONCLUSIVE")
+        note = next(n for cid, ok, n in results if cid == "not-permission-blocked")
+        self.assertIn("git log --oneline", note)
+        self.assertIn("never tried report.sh new", note)
+        # the skill loaded and was triggered: those checks stand, and they pass
+        self.assertEqual({cid for cid, ok, _ in results if cid in ("skill-loaded", "skill-trigger") and not ok}, set())
+
+    def test_every_channel_alone_gives_the_same_verdict(self):
+        by_result = dict(calls1=[("Skill", {"skill": SKILL}), ("Bash", {"command": EXPLORE}, "")], denials=EXPLORE_DENIAL)
+        for label, override in (("tool_result text", {}), ("result.permission_denials", by_result)):
+            with self.subTest(channel=label):
+                self.assertEqual(checks.verdict(self.case(**override), checks.run_checks(self.case(**override))), "INCONCLUSIVE")
+        # a system permission_denied event (the real one has tool_name and tool_use_id, no tool_input)
+        row, events, states = self.stopped(calls1=[("Skill", {"skill": SKILL}), ("Bash", {"command": EXPLORE}, "")])
+        call_id = next(i for i, name, _ in checks.hook_trace.tool_uses(events) if name == "Bash")
+        events.insert(-1, {"type": "system", "subtype": "permission_denied", "tool_name": "Bash", "tool_use_id": call_id, "message": DONTASK})
+        case = checks.Case.build(row, events, states)
+        self.assertEqual(checks.verdict(case, checks.run_checks(case)), "INCONCLUSIVE")
+        self.assertEqual([c for _, c in checks.denied_bash(case.turns[0])], [EXPLORE])
+
+    def test_one_denied_call_seen_through_all_three_channels_counts_once(self):
+        row, events, states = self.stopped()
+        call_id = next(i for i, name, _ in checks.hook_trace.tool_uses(events) if name == "Bash")
+        events.insert(-1, {"type": "system", "subtype": "permission_denied", "tool_name": "Bash", "tool_use_id": call_id, "message": DONTASK})
+        events[-1]["permission_denials"] = [{"tool_name": "Bash", "tool_use_id": call_id, "tool_input": {"command": EXPLORE}}]
+        self.assertEqual(checks.denied_bash(checks.Case.build(row, events, states).turns[0]), [(call_id, EXPLORE)])
+
+    def test_a_denied_unrelated_call_followed_by_a_report_sh_new_that_ran_stays_a_pass(self):
+        denied = ("Bash", {"command": EXPLORE}, DONTASK)
+        calls = [REPORT_CALLS[0], denied] + REPORT_CALLS[1:]
+        self.assertEqual(judge("report", calls1=calls, denials=EXPLORE_DENIAL), "PASS")
+        self.assertTrue(passes("not-permission-blocked", calls1=calls, denials=EXPLORE_DENIAL))
+
+    def test_a_denied_report_sh_new_is_still_inconclusive_by_the_old_rule(self):
+        calls = [REPORT_CALLS[0], ("Bash", {"command": NEW}, DONTASK)]
+        kwargs = dict(calls1=calls, denials=[{"tool_name": "Bash", "tool_input": {"command": NEW}}], report_found=False, tmp_sitrep=[])
+        self.assertFalse(passes("not-permission-blocked", **kwargs))
+        self.assertEqual(judge("report", **kwargs), "INCONCLUSIVE")
+
+    def test_a_successful_bash_result_that_mentions_the_text_is_not_a_denial(self):
+        calls = [REPORT_CALLS[0], ("Bash", {"command": "cat notes.md"}, "Permission to use Bash has been denied (a quoted note)")] + REPORT_CALLS[1:]
+        row, events, states = helpers.good("report", calls1=calls)
+        # the same text on a call that says is_error: false is not read as a denial
+        for event in events:
+            for block in event.get("message", {}).get("content", []) if event.get("type") == "user" else []:
+                block["is_error"] = False
+        self.assertEqual(checks.denied_bash(checks.Case.build(row, events, states).turns[0]), [])
+
+    def test_a_skill_that_never_ran_report_sh_without_any_denial_is_still_a_failure(self):
+        calls = [("Skill", {"skill": SKILL}), ("Read", {"file_path": "/r/ws/docs/open-questions.md"})]
+        self.assertEqual(judge("report", calls1=calls, report_found=False, tmp_sitrep=[]), "FAIL")
+
+    def test_a_denial_in_turn_two_only_does_not_damage_turn_one(self):
+        # turn 1 made the report; an unrelated Bash denial in the cleanup turn is not an exploration stop (turn 1 ran new)
+        calls2 = [("Bash", {"command": "git log | head"}, DONTASK)] + CLEAN_CALLS
+        self.assertEqual(judge("report-clean", calls2=calls2), "PASS")
 
 
 class Gates(unittest.TestCase):

@@ -7,8 +7,9 @@ shows only the main conversation. Groups:
     precondition  was the behaviour exercised at all? A failure makes the trial INCONCLUSIVE, not FAIL (see `verdict`): the run did
                   not finish (`run-completed`), the workspace snapshots were not recorded (`state-recorded`: a case never recorded, a
                   trace without its .state.json), a report.sh that was tried left no report directory, or a permission denial
-                  blocked report.sh or data.js, which says nothing about the skill (a plugin that did not load, or not the one under
-                  test, `skill-loaded`, is treated the same way)
+                  blocked report.sh or data.js, or turn 1 had a denied Bash call of any kind and never tried `report.sh new` (the harness's
+                  own grants denied the agent's exploration), which says nothing about the skill (a plugin that did not load, or not the
+                  one under test, `skill-loaded`, is treated the same way)
     process       did the skill load and trigger, and was the report made and removed by report.sh, not by hand?
     gate          nothing was written into the project, the template and the tracker are untouched, the report holds only data.js
     outcome       data.js defines a valid window.SITREP with a dependency between two items, the milestone item and the numbers of the
@@ -47,6 +48,7 @@ DATA_JS_PATH_RE = re.compile(r"(?:^|/)data\.js$")                 # a file_path 
 DATA_JS_ALONE_RE = re.compile(r"\S*(?:^|/)data\.js")             # fullmatch: a string that is only a path (denials of unknown shape)
 GUARDED_TOOLS = ("Bash", "Write", "Edit")
 # how a refusal might read in a tool_result (the wording is unconfirmed: README item 1)
+DENIED_BASH_RE = re.compile(r"Permission to use Bash\b[^\n]{0,200}?\bdenied", re.IGNORECASE)     # the dontAsk denial text of a Bash call (seen in a real trace, Claude Code 2.1.330)
 REFUSING_RE = re.compile(r"refusing to delete")      # what report.sh clean prints when it declines (plugins/sitrep/skills/sitrep/scripts/report.sh)
 REFUSED_RE = re.compile(r"permission|not allowed|denied|not granted|disallowed|requires approval|not permitted", re.IGNORECASE)
 LIST_LINE_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+", re.MULTILINE)
@@ -386,23 +388,58 @@ def _refusals(case):
     return [r for turn in case.turns for r in _refusals_in(turn)]
 
 
+def denied_bash(events):
+    """[(tool_use_id, command)] of the Bash calls of `events` (one turn) that were denied, each once, whichever channel reported it: an
+    element of the result event's permission_denials or a system permission_denied event naming the Bash tool (the real shapes: a dict
+    with tool_name, tool_use_id and, in the result event only, tool_input), or a Bash tool_result that is not marked as a success and
+    reads like the dontAsk denial ('Permission to use Bash has been denied ...'). The command is looked up by tool_use_id when the
+    denial does not carry it ('' when it cannot be found)."""
+    uses = {call_id: tool_input for call_id, name, tool_input in hook_trace.tool_uses(events) if name == "Bash"}
+    found = {}
+    for denial in hook_trace.permission_denials(events):
+        if denial.get("tool_name") != "Bash":
+            continue
+        call_id, tool_input = str(denial.get("tool_use_id") or ""), denial.get("tool_input")
+        command = str(tool_input.get("command", "")) if isinstance(tool_input, dict) else str(uses.get(call_id, {}).get("command", ""))
+        found.setdefault(call_id or command, command)
+    for call_id, text in hook_trace.tool_results(events, unless_ok=True).items():
+        if call_id in uses and DENIED_BASH_RE.search(text.strip()[:300]):
+            found.setdefault(call_id, str(uses.get(call_id, {}).get("command", "")))
+    return list(found.items())
+
+
+def unexercised_denials(case):
+    """The denied Bash calls of turn 1 when turn 1 never tried `report.sh new` (else []): the agent was stopped by the permission
+    system before it reached the behaviour under test, e.g. an exploration command chained from a grant the harness did not give.
+    A denied unrelated call followed by a `report.sh new` that ran is not one (an attempted `new` that was denied is judged by
+    denial_kinds)."""
+    return [] if _ran_new(case) else denied_bash(case.turns[0])
+
+
 def blocked_turns(case):
-    """The turns (1, 2) in which report.sh or a data.js write was denied, by a recorded denial or by a refusal read from a tool_result."""
+    """The turns (1, 2) in which report.sh or a data.js write was denied, by a recorded denial or by a refusal read from a tool_result;
+    turn 1 also when a Bash call was denied there and `report.sh new` was never tried (unexercised_denials)."""
     return {n for n, turn in enumerate(case.turns, start=1)
-            if any(denial_kinds(d) for d in hook_trace.permission_denials(turn)) or _refusals_in(turn)}
+            if any(denial_kinds(d) for d in hook_trace.permission_denials(turn)) or _refusals_in(turn) or (n == 1 and unexercised_denials(case))}
 
 
 def not_permission_blocked(case):
     """A denial of `report.sh new` or `clean` or of a Write or Edit of a data.js; denials of open/xdg-open/start are expected (they are
     not granted), and so is a denial of any other command that only names data.js (`node --check .../data.js`): the skill is not at fault.
+    Also failed (the trial is INCONCLUSIVE) when turn 1 had a denied Bash call of any kind and never tried `report.sh new`: a compound
+    exploration command denied for one ungranted part ends the agent's work before the skill's own step, so nothing was measured.
 
     Read from result.permission_denials, from system permission_denied events and from tool_results of such calls that read like a
-    refusal (neither channel is confirmed to carry the denial: README item 1)."""
+    refusal (neither channel is confirmed to carry the denial: README item 1; the dontAsk denial text and both events are seen in a
+    real trace, Claude Code 2.1.330)."""
     denials = [d for turn in case.turns for d in hook_trace.permission_denials(turn)]
     blocked = [d for d in denials if denial_kinds(d)]
     refused = _refusals(case)
-    return "not-permission-blocked", not blocked and not refused, \
-        f"permission denials: {len(denials)}; of report.sh or a data.js write: {len(blocked)} {[json.dumps(d)[:80] for d in blocked]}; tool results that read as a refusal: {refused or 'none'}"
+    stopped = unexercised_denials(case)
+    return "not-permission-blocked", not blocked and not refused and not stopped, \
+        f"permission denials: {len(denials)}; of report.sh or a data.js write: {len(blocked)} {[json.dumps(d)[:80] for d in blocked]}; tool results that read as a refusal: {refused or 'none'}; " \
+        + (f"turn 1 had denied Bash calls and never tried report.sh new, so the behaviour under test was not exercised: {[c[:80] or '(command unknown)' for _, c in stopped]}" if stopped
+           else "no denied Bash call kept turn 1 from trying report.sh new")
 
 
 def report_attempted(case):
@@ -660,8 +697,8 @@ def warnings(results):
 
 
 def _scope(case, failed):
-    """Which turns are damaged: broken1 (turn 1 did not finish, a report.sh call or data.js write of it was denied, the report it tried to
-    make was not found, the plugin under test did not load, or the snapshots were not recorded) and broken2 (turn 2 did not finish or had a denial)."""
+    """Which turns are damaged: broken1 (turn 1 did not finish, a report.sh call or data.js write of it was denied, a Bash call of it was
+    denied before `report.sh new` was tried, the report it tried to make was not found, the plugin under test did not load, or the snapshots were not recorded) and broken2 (turn 2 did not finish or had a denial)."""
     problems, blocked = turn_problems(case), blocked_turns(case)
     return SimpleNamespace(
         problems=problems,

@@ -57,6 +57,25 @@ class HookResponses(unittest.TestCase):
         self.assertEqual(hooks.hook_responses(self.EVENTS, "stop"), [self.EVENTS[0]])
 
 
+class HookErrors(unittest.TestCase):
+    def test_a_stop_reminder_that_asks_for_work_is_not_an_error(self):
+        self.assertEqual(hooks.hook_errors([helpers.STOP_REMINDER, helpers.hook_response(0, "success")]), [])
+
+    def test_an_exit_code_outside_zero_and_two_is_an_infrastructure_error(self):
+        self.assertEqual(hooks.hook_errors([helpers.HOOK_EPERM]), [("Stop", 1, helpers.EPERM)])
+
+    def test_no_exit_code_and_outcome_error_is_one_too(self):
+        event = {"type": "system", "subtype": "hook_response", "hook_event": "SessionStart", "outcome": "error", "stderr": "boom"}
+        self.assertEqual(hooks.hook_errors([event]), [("SessionStart", None, "boom")])
+
+    def test_no_exit_code_and_no_error_outcome_is_not(self):
+        self.assertEqual(hooks.hook_errors([{"type": "system", "subtype": "hook_response", "hook_event": "Stop"}, helpers.hook_response(None, "success")]), [])
+
+    def test_hook_started_and_other_events_are_ignored(self):
+        started = {"type": "system", "subtype": "hook_started", "hook_name": "Stop", "hook_event": "Stop", "exit_code": 1}
+        self.assertEqual(hooks.hook_errors([started, helpers.init(), helpers.result("x")]), [])
+
+
 class BashCommands(unittest.TestCase):
     def test_main_conversation_bash_calls_in_order(self):
         sub = helpers.call("Bash", command="rm -rf /")

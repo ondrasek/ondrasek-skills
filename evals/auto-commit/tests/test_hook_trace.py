@@ -57,6 +57,30 @@ class Hooks(unittest.TestCase):
         foreign = {"type": "system", "subtype": "hook_response", "hook_event": "Stop", "exit_code": 2, "stderr": "milestones: a reminder"}
         self.assertEqual(hook_trace.continuation([helpers.init(), foreign, helpers.result()], MARK), "none")
 
+    def test_only_an_exit_code_other_than_0_and_2_is_an_infrastructure_error(self):
+        quiet = {**helpers.hook_event(), "exit_code": 0, "outcome": "success"}
+        other = {**helpers.hook_infra_error(), "hook_event": "PreToolUse"}
+        odd = {**helpers.hook_infra_error(), "exit_code": True}
+        broken = helpers.hook_infra_error()
+        # the plugin's own report is exit_code 2 with outcome 'error': not an infrastructure error
+        self.assertEqual(hook_trace.hook_errors([helpers.hook_event(), quiet, other, odd, {"type": "system", "subtype": "hook_response", "hook_event": "Stop"}], "Stop"), [])
+        self.assertEqual(hook_trace.hook_errors([helpers.hook_event(), broken, {**broken, "exit_code": 127}], "Stop"), [broken, {**broken, "exit_code": 127}])
+
+    def test_the_error_text_is_trimmed_and_prefers_output(self):
+        self.assertEqual(hook_trace.error_text(helpers.hook_infra_error()), helpers.EPERM)
+        self.assertEqual(hook_trace.error_text({"stderr": "a\n\n  b", "stdout": "c"}), "a b")
+        self.assertEqual(hook_trace.error_text({"stdout": "only stdout"}), "only stdout")
+        self.assertEqual(hook_trace.error_text({"output": "x" * 500}), "x" * 200 + "...")
+        self.assertEqual(hook_trace.error_text({}), "")
+
+    def test_the_recorded_event_sequence_is_report_then_a_silent_second_stop(self):
+        # real shape (2.1.330): started, response exit 2 with the report, started, response exit 0 and empty
+        quiet = {**helpers.hook_event(), "output": "", "stderr": "", "exit_code": 0, "outcome": "success"}
+        events = [helpers.init(), helpers.hook_started(), helpers.hook_event(), helpers.hook_started(), quiet, helpers.result()]
+        self.assertEqual(hook_trace.continuation(events, MARK), "hook-event-only")
+        self.assertEqual(len(hook_trace.marked_responses(events, "Stop", MARK)), 1)
+        self.assertEqual(hook_trace.hook_errors(events, "Stop"), [])
+
     def test_nothing_is_none(self):
         quiet = {"type": "system", "subtype": "hook_response", "hook_event": "Stop", "exit_code": 0}
         pre = {"type": "system", "subtype": "hook_response", "hook_event": "PreToolUse", "exit_code": 2}

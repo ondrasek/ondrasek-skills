@@ -49,13 +49,14 @@ def _flatten(content):
     return ""
 
 
-def tool_results(events):
-    """{tool_use_id: text} of every tool_result block; a list of blocks is flattened to its text. is_error is not relied on."""
+def tool_results(events, unless_ok=False):
+    """{tool_use_id: text} of every tool_result block; a list of blocks is flattened to its text. is_error is not relied on, except with
+    `unless_ok`, which leaves out the results that say is_error: false (a real denial has is_error: true; an absent field is still read)."""
     results = {}
     for event in events:
         if event.get("type") == "user":
             for block in trace.blocks(event):
-                if block.get("type") == "tool_result" and isinstance(block.get("tool_use_id"), str):
+                if block.get("type") == "tool_result" and isinstance(block.get("tool_use_id"), str) and not (unless_ok and block.get("is_error") is False):
                     results[block["tool_use_id"]] = _flatten(block.get("content"))
     return results
 

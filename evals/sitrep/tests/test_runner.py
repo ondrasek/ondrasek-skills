@@ -2,11 +2,13 @@
 import io
 import json
 import os
+import re
 import shlex
 import shutil
 import sys
 import tempfile
 import unittest
+import fnmatch
 from pathlib import Path
 from unittest import mock
 
@@ -260,10 +262,26 @@ class DefaultCommand(unittest.TestCase):
         argv = self.argv(self.EXTRA)
         granted = argv[argv.index("--allowedTools") + 1]
         self.assertEqual(granted, run_evals.ALLOWED)
-        for tool in ("Skill", "Read", "Write", "Edit", "Bash(*report.sh *)", "Bash(ls *)", "Bash(cat *)"):
+        for tool in ("Skill", "Read", "Write", "Edit", "Bash(*report.sh *)", "Bash(ls *)", "Bash(cat *)", "Bash(git log *)", "Bash(git status *)", "Bash(git diff *)",
+                     "Bash(head *)", "Bash(tail *)", "Bash(wc *)", "Bash(grep *)", "Bash(find *)"):
             self.assertIn(tool, granted.split(","))
         for tool in ("open", "xdg-open", "start", "Bash(*)", "WebFetch"):
             self.assertNotIn(tool, granted.split(","))
+
+    def test_no_bash_grant_can_write_or_run_arbitrary_code(self):
+        verbs = {re.sub(r" \*\)$|\)$", "", g)[len("Bash("):] for g in run_evals.ALLOWED.split(",") if g.startswith("Bash(")}
+        self.assertEqual(verbs, {"*report.sh", '*report.sh"', *run_evals.READ_ONLY_BASH})
+        for banned in ("rm", "mv", "cp", "sed", "awk", "tee", "xargs", "sh", "bash", "python", "python3", "node", "env", "curl", "git", "git *", "open", "xdg-open", "start", "*"):
+            self.assertNotIn(banned, verbs)
+
+    def test_a_chained_exploration_command_is_covered_part_by_part(self):
+        # the command of the first real with-milestones run: every simple command of it needs a grant, because dontAsk denies the whole line otherwise
+        import shell_argv
+        patterns = [g[len("Bash("):-1] for g in run_evals.ALLOWED.split(",") if g.startswith("Bash(")]
+        line = "ls -la . .cache 2>&1; cat .cache/milestones.json 2>&1; git log --oneline | head; cat /p/schema.md"
+        for command in shell_argv.commands(line):
+            text = " ".join([command.name, *command.args])
+            self.assertTrue(any(fnmatch.fnmatchcase(text, p) for p in patterns), f"no Bash grant covers {text!r}")
 
     def test_the_plugin_under_test_exists(self):
         self.assertTrue((run_evals.PLUGIN / ".claude-plugin" / "plugin.json").is_file())

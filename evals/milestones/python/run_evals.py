@@ -11,8 +11,8 @@ trace, saved as artifacts/<id>.jsonl; the two workspace snapshots (before, after
 directory is removed afterwards unless --keep is given.
 
 A trial is PASS, FAIL or INCONCLUSIVE: INCONCLUSIVE when a precondition check failed (the behaviour was never exercised: the run did
-not complete, a snapshot is missing, the script was permission-denied, the Stop hook did not run or its report did not reach the
-model) and every other failed check is explained by one of those (checks.EXPLAINED_BY), FAIL when a check failed that no failed
+not complete, a snapshot is missing, the script was permission-denied, a hook failed to run (infrastructure error), the Stop hook did
+not run or its report did not reach the model) and every other failed check is explained by one of those (checks.EXPLAINED_BY), FAIL when a check failed that no failed
 precondition explains. Checks of the `soft` group (they rest only on the model's prose) are advisory: a failed one is a WARN, listed
 and counted in the report, and never changes the verdict or the exit code.
 The exit code is 0 when every trial passes (with or without warnings), 1 when a trial fails or is inconclusive, 2 when a run cannot start.
@@ -36,12 +36,17 @@ UNIT = HERE.parent
 REPO = UNIT.parents[1]
 PLUGIN = REPO / "plugins" / "milestones"
 GROUP_ORDER = ("precondition", "process", "gate", "outcome", "soft")
-# Read-only tools, the script, and Edit/Write plus git add/commit: those four are granted on purpose, so that a direct tracker write or a
-# commit of the tracker can happen and be measured. The script is granted in the two spellings SKILL.md gives it: the skill calls it with a
-# quoted absolute path, so the closing quote comes before the verb and the unquoted pattern alone does not match (observed in the first
-# real run: dontAsk denied the call). A denial is still reported as INCONCLUSIVE (not-permission-blocked).
-ALLOWED = ("Skill,Read,Glob,Grep,Edit,Write,Bash(python3 *milestones.py *),Bash(python3 *milestones.py\" *),Bash(ls *),Bash(cat *),"
-           "Bash(git status *),Bash(git add *),Bash(git commit *)")
+# Read-only tools, Edit/Write, git add/commit, and python3 itself: Edit, Write and git add/commit are granted on purpose, so that a direct
+# tracker write or a commit of the tracker can happen and be measured. python3 is granted whole (`Bash(python3 *)`) because the agent
+# calls the script in forms no path-shaped pattern covers: the quoted absolute path of SKILL.md, and (observed in the real runs) a
+# compound `S="/abs/milestones.py"; python3 "$S" set 2 ... && python3 "$S" show`, where the script path sits in a variable, so
+# `Bash(python3 *milestones.py *)` never matches. `Bash(S=*)` covers the assignment segment; git log/diff/check-ignore, head, tail, wc
+# and grep are the read-only helpers an agent chains. The narrow script patterns stay listed for documentation. Granting python3 whole
+# does not hide a tracker write from the measurement: no-direct-tracker-write inspects the Bash command for python write patterns
+# (open(..., 'w'), write_text, json.dump, ...). A denial is still reported as INCONCLUSIVE (not-permission-blocked).
+ALLOWED = ("Skill,Read,Glob,Grep,Edit,Write,Bash(python3 *milestones.py *),Bash(python3 *milestones.py\" *),Bash(python3 *),Bash(S=*),"
+           "Bash(ls *),Bash(cat *),Bash(git status *),Bash(git add *),Bash(git commit *),Bash(git log *),Bash(git diff *),"
+           "Bash(git check-ignore *),Bash(head *),Bash(tail *),Bash(wc *),Bash(grep *)")
 # `env -u` because runner_cmd.run merges os.environ and cannot unset: an inherited CLAUDE_PROJECT_DIR would point the Stop hook and
 # milestones.py at the repository this harness was started from, and an inherited GIT_DIR (the harness started from a git hook) would
 # point the agent's git at it. `project,local` keeps user settings, hooks and plugins out (unconfirmed for hooks); never --bare, which

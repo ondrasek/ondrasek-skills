@@ -43,7 +43,7 @@ WRITE_SUBCOMMANDS = {"set", "add", "remove", "title", "init"}
 SCRIPT_SUBCOMMANDS = WRITE_SUBCOMMANDS | {"show"}
 PYTHON_RE = re.compile(r"python[\d.]*$")
 # A Bash command that writes the tracker file itself (a read such as `cat .cache/milestones.json` is not one). A command is split into
-# segments on unquoted && || ; | and newlines (split_commands), and every pattern below is applied to ONE segment that names the tracker.
+# segments on unquoted && || ; | and newlines (split_commands, then expanded_segments for simple `NAME=value` variables), and every pattern below is applied to ONE segment that names the tracker.
 # A segment that runs the script is checked for a redirect into the tracker only.
 # the end of the tracker's file name: `milestones.json.bak` or `milestones.json~` is another file
 TRACKER_FILE = r"milestones\.json(?![\w~]|\.\w)"
@@ -66,7 +66,7 @@ PY_WRITE_RE = re.compile(rf"\bopen\((?:{_ARGS},)?\s*{PY_MODE}|\bmode\s*=\s*{PY_M
 
 GROUPS = {
     "agent-completed": "precondition", "plugin-under-test-isolated": "precondition", "not-permission-blocked": "precondition",
-    "reminder-fired": "precondition", "reminder-delivered": "precondition",
+    "reminder-fired": "precondition", "reminder-delivered": "precondition", "hooks-ran": "precondition",
     "skill-loaded": "process", "skill-trigger": "process", "shown-by-script": "process", "written-by-script": "process",
     "show-reads-only": "gate", "no-direct-tracker-write": "gate", "tracker-not-committed": "gate", "nothing-else-changed": "gate",
     "no-tracker-when-negative": "gate", "no-write-attempt": "gate",
@@ -172,7 +172,7 @@ def script_invocations(command):
     """The milestones.py subcommands (show, set, add, remove, title, init) that a Bash command line runs, from its parsed argv: a text that
     merely mentions the script (an echo, a grep pattern, a python -c string) is not a call."""
     found = []
-    for segment in split_commands(command):
+    for segment in expanded_segments(command):
         for token in script_tokens(segment)[1:4]:
             if token in SCRIPT_SUBCOMMANDS:
                 found.append(token)
@@ -212,9 +212,33 @@ def split_commands(command):
     return [seg for seg in segments if seg.strip()]
 
 
+ASSIGNMENT_RE = re.compile(r"\s*(?:export\s+)?([A-Za-z_]\w*)=(.*)$", re.S)
+
+
+def expanded_segments(command):
+    """split_commands, with the shell variables that an earlier segment of the same line assigned (`S="/abs/milestones.py"; python3 "$S"
+    set 2 ...`, observed in the real runs) substituted textually into the later ones ($NAME and ${NAME}). Only a plain assignment
+    segment whose value is one word counts; no command substitution, defaults or arrays. Without this the script call would not be
+    recognised and a correct run would look like one that never ran the script."""
+    values, out = {}, []
+    for segment in split_commands(command):
+        match = ASSIGNMENT_RE.match(segment)
+        if match:
+            try:
+                words = shlex.split(match.group(2), comments=True)
+            except ValueError:
+                words = []
+            if len(words) == 1 and "$(" not in match.group(2) and "`" not in match.group(2):
+                values[match.group(1)] = words[0]
+        for name, value in values.items():
+            segment = segment.replace("${" + name + "}", value).replace("$" + name, value)
+        out.append(segment)
+    return out
+
+
 def writes_tracker(command):
     """True when a segment of the Bash command writes, moves or deletes the tracker file without going through the script."""
-    for segment in split_commands(command):
+    for segment in expanded_segments(command):
         if "milestones.json" not in segment:
             continue
         if script_tokens(segment):
@@ -308,6 +332,17 @@ def not_permission_blocked(case):
     blocked = list(dict.fromkeys(blocked))
     return "not-permission-blocked", not blocked, (f"denied calls to milestones.py: {len(denied_ids) + sum(owed.values())}; never retried successfully: "
                                                   f"{blocked or 'none'} (a denial means the grant did not match)")
+
+
+def hooks_ran(case):
+    """No hook reported an infrastructure error (hook_trace.hook_errors: exit code outside 0 and 2, e.g. EPERM creating the plugin data
+    directory when Claude Code itself runs inside a sandbox). A hook that never ran cannot be blamed, so this trial is INCONCLUSIVE with
+    the error text in the note. A Stop hook that exits 2 to ask for work is the hook working and is not an error."""
+    errors = hooks.hook_errors(case.events)
+    if not errors:
+        return "hooks-ran", True, "no hook reported an infrastructure error"
+    return "hooks-ran", False, "; ".join(f"{event} hook failed (exit {code}): {text[:200] or 'no output'}" for event, code, text in errors) + \
+        " (run the trials outside the Claude Code sandbox)"
 
 
 def reminder_fired(case):
@@ -604,7 +639,7 @@ def quiet_when_nothing_changed(case):
 # ---- which checks apply ------------------------------------------------------------------------------------
 
 SKILL_RUN = [agent_completed, plugin_under_test_isolated, skill_loaded, skill_trigger, not_permission_blocked]
-REMINDED = [agent_completed, plugin_under_test_isolated, skill_loaded, reminder_fired, reminder_delivered, not_permission_blocked]
+REMINDED = [agent_completed, plugin_under_test_isolated, skill_loaded, hooks_ran, reminder_fired, reminder_delivered, not_permission_blocked]
 GATES = [no_direct_tracker_write, tracker_not_committed, nothing_else_changed]
 BY_EXPECT = {
     "show": SKILL_RUN + [shown_by_script, show_reads_only, no_write_attempt, reply_names_current] + GATES,
@@ -632,6 +667,7 @@ EXPLAINED_BY = {
     "agent-completed": MISSING | {"skill-loaded", "skill-trigger"},
     "plugin-under-test-isolated": MISSING | {"skill-loaded", "skill-trigger"},
     "not-permission-blocked": set(MISSING),
+    "hooks-ran": set(MISSING),
     "reminder-fired": set(MISSING),
     "reminder-delivered": set(MISSING),
 }

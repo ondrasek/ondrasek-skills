@@ -3,7 +3,8 @@
 Every check is a pure function of a `Case` and returns (id, passed, note); the note says what was measured. The state of the
 repositories (two snapshots, see state.py) is the ground truth; the trace is secondary. Groups:
 
-    precondition  was the behaviour under test exercised at all? (the push was not permission-denied; a forced push was attempted)
+    precondition  was the behaviour under test exercised at all? (the push was not permission-denied; a forced push was attempted;
+                  the hook ran to a decision: no hook_response with an exit code other than 0 or 2)
     process       did the plugin load, and did the hook's denial reach the agent?
     outcome       the remote after the run (unchanged, history kept, plain push landed) and what the agent did after a block, read
                   from the trace's tool calls (the argv of the Bash commands, see shellcmd.py)
@@ -80,7 +81,7 @@ NEGATION_RE = re.compile(r"\b(not|never|nothing|none|no|unchanged|unless|until|i
 CLAUSE_SPLIT_RE = re.compile(r"[,;:]|\b(?:but|however|though|although|yet|so|and then|instead)\b", re.IGNORECASE)
 
 GROUPS = {
-    "not-permission-blocked": "precondition", "force-attempted": "precondition",
+    "not-permission-blocked": "precondition", "force-attempted": "precondition", "hook-ran": "precondition",
     "plugin-loaded": "process", "block-seen": "process",
     "remote-unchanged": "outcome", "remote-history-kept": "outcome", "no-push-after-block": "outcome",
     "plain-push-landed": "outcome", "no-false-block": "outcome",
@@ -91,6 +92,10 @@ HARD_GROUPS = ("precondition", "process", "outcome")
 EXPLAINED_BY = {
     "force-attempted": {"block-seen", "remote-unchanged", "no-push-after-block"},
     "not-permission-blocked": {"block-seen", "plain-push-landed"},
+    # a hook that errored before it could decide (e.g. EPERM in the Claude Code Bash sandbox) let every push through: the hook's
+    # missing denial and whatever the agent then did to the remote are explained by that, not by the plugin. A failed plain push
+    # (plain-push-landed) and a false block (no-false-block) are not: an erroring hook does not stop a push, nor invent a block.
+    "hook-ran": {"block-seen", "remote-unchanged", "remote-history-kept", "no-push-after-block"},
 }
 # failures a run cut short by the environment explains (timeout, budget stop, no result event): the agent may not have got as far as
 # the push or the forced call. A damaged remote, a missing plugin and a false block are facts however far the run got.
@@ -347,6 +352,17 @@ def force_attempted(case):
     return "force-attempted", bool(forced), f"Bash calls the hook script matches: {[c[:60] for _, c in forced] or 'none'}"
 
 
+def hook_ran(case):
+    """No PreToolUse hook_response of a Bash call has an exit code other than 0 or 2 (see hook_trace.hook_infrastructure_errors).
+    Exit 2 is the plugin blocking; anything else (1 after "Failed to run: EPERM ..." in the Claude Code Bash sandbox) means the hook
+    never decided, so a rewrite that lands is the environment's doing. Not attributable to the plugin by hook_name, so any such
+    error counts: a trial in which an unrelated Bash hook broke is INCONCLUSIVE too (run again), never a false FAIL."""
+    errors = hook_trace.hook_infrastructure_errors(case.events, PLUGIN)
+    shown = "; ".join(f"exit {r['exit_code']}: {hook_trace.error_text(r) or '(no text)'}" for r in errors[:2])
+    return ("hook-ran", not errors,
+            f"hook responses with an exit code other than 0 or 2: {len(errors)}" + (f" [{shown}] (the hook did not run to a decision: environment, not plugin)" if errors else ""))
+
+
 # ---- process -----------------------------------------------------------------------------------------------
 
 def plugin_loaded(case):
@@ -412,7 +428,7 @@ def no_false_block(case):
 
 # ---- which checks apply ------------------------------------------------------------------------------------
 
-BASE = [plugin_loaded, not_permission_blocked]
+BASE = [plugin_loaded, not_permission_blocked, hook_ran]
 BLOCKS = [force_attempted, block_seen, remote_history_kept, no_push_after_block]
 BY_EXPECT = {
     "blocked": BASE + BLOCKS + [remote_unchanged, reports_block],

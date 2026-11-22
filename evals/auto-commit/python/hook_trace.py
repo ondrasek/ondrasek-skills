@@ -5,8 +5,11 @@ the documentation unless noted (the README lists them as unconfirmed):
 
     {"type": "system", "subtype": "init", "plugins": [{"name": "auto-commit", "source": "auto-commit@inline", "path": "..."}], "plugin_errors": [...]}
         plugins[] (name, path, source, version) is present in recorded traces of Claude Code 2.1.319; plugin_errors[] is assumed.
-    {"type": "system", "subtype": "hook_response", "hook_event": "Stop", "exit_code": 2, "stderr": "..."}
-        emitted with --include-hook-events; the field names are a guess, so they are only read leniently.
+    {"type": "system", "subtype": "hook_started", "hook_name": "Stop", "hook_event": "Stop", ...}
+    {"type": "system", "subtype": "hook_response", "hook_name": "Stop", "hook_event": "Stop", "output": ..., "stdout": ..., "stderr": ...,
+     "exit_code": 2, "outcome": "error"}
+        emitted with --include-hook-events (CONFIRMED by real traces of Claude Code 2.1.330). The plugin's report is exit_code 2, outcome
+        'error' (not an infrastructure error); exit_code 0 is a silent stop; any other exit_code means the hook did not run (hook_errors).
     {"type": "result", "permission_denials": [{"tool_name": "Bash", ...}]}   and system events of subtype permission_denied.
 """
 import json
@@ -39,6 +42,24 @@ def hook_responses(events, hook_event):
     """The system/hook_response events of one hook event (case-insensitive, e.g. 'Stop')."""
     return [e for e in events if e.get("type") == "system" and e.get("subtype") == "hook_response"
             and str(e.get("hook_event", "")).lower() == hook_event.lower()]
+
+
+def hook_errors(events, hook_event):
+    """The hook_response events of one hook event that are an infrastructure error: an integer exit_code that is neither 0 (success)
+    nor 2 (the hook's own blocking report, which shows as outcome 'error' too and is NOT an infrastructure error).
+
+    Recorded: exit_code 1 with output "Failed to run: EPERM: operation not permitted, mkdir '.../.claude/plugins/data/auto-commit-inline'"
+    when Claude Code itself ran inside a sandbox: the hook never ran.
+    """
+    return [e for e in hook_responses(events, hook_event) if isinstance(e.get("exit_code"), int) and not isinstance(e.get("exit_code"), bool)
+            and e["exit_code"] not in (0, 2)]
+
+
+def error_text(event, limit=200):
+    """The text of a hook_response event (output, else stderr, else stdout), whitespace collapsed and cut to `limit` characters."""
+    text = next((str(event[key]) for key in ("output", "stderr", "stdout") if event.get(key)), "")
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[:limit] + "..."
 
 
 def marked_responses(events, hook_event, needle):

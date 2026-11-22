@@ -63,7 +63,22 @@ def hook_report():
 
 
 def hook_event():
-    return {"type": "system", "subtype": "hook_response", "hook_event": "Stop", "exit_code": 2, "stderr": REPORT}
+    """The plugin's report as Claude Code 2.1.330 records it: hook_response, exit_code 2, outcome 'error' (not an infrastructure error)."""
+    return {"type": "system", "subtype": "hook_response", "hook_name": "Stop", "hook_event": "Stop", "output": REPORT, "stdout": "", "stderr": REPORT,
+            "exit_code": 2, "outcome": "error"}
+
+
+def hook_started():
+    return {"type": "system", "subtype": "hook_started", "hook_name": "Stop", "hook_event": "Stop"}
+
+
+EPERM = "Failed to run: EPERM: operation not permitted, mkdir '/Users/x/.claude/plugins/data/auto-commit-inline'"
+
+
+def hook_infra_error(exit_code=1, output=EPERM):
+    """INVENTED trace of a Stop hook that never ran, in the shape recorded when Claude Code ran inside a sandbox: exit_code 1 (not 0 or 2)."""
+    return {"type": "system", "subtype": "hook_response", "hook_name": "Stop", "hook_event": "Stop", "output": output, "stdout": "", "stderr": output,
+            "exit_code": exit_code, "outcome": "error"}
 
 
 def result(text="done", denials=(), cost=0.5, subtype="success", is_error=False):

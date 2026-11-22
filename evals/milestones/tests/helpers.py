@@ -98,6 +98,19 @@ def user_text(text):
     return {"type": "user", "parent_tool_use_id": None, "message": {"content": [{"type": "text", "text": text}]}}
 
 
+def hook_response(exit_code, outcome, output="", event="Stop"):
+    """The system event of a finished hook, in the shape recorded from Claude Code 2.1.330 (--include-hook-events)."""
+    return {"type": "system", "subtype": "hook_response", "hook_name": event, "hook_event": event, "output": output, "stdout": "", "stderr": output,
+            "exit_code": exit_code, "outcome": outcome}
+
+
+# a Stop reminder that fires and asks for work: exit 2, outcome 'error' (NOT an infrastructure error)
+STOP_REMINDER = hook_response(2, "error", HOOK_REPORT)
+# a hook that never ran: seen when Claude Code itself ran inside a sandbox
+EPERM = "Failed to run: EPERM: operation not permitted, mkdir '/Users/x/.claude/plugins/data/milestones-inline'"
+HOOK_EPERM = hook_response(1, "error", EPERM)
+
+
 def result(text, denials=(), session="stub-session"):
     return {"type": "result", "subtype": "success", "is_error": False, "result": text, "num_turns": 3, "total_cost_usd": 0.5, "duration_ms": 1000,
             "permission_denials": list(denials), "session_id": session}
@@ -109,16 +122,16 @@ def text_of_tracker(data):
 
 def good(expect, fixture=None, want=None, plugins=("milestones",), skills=(SKILL_ID,), calls=None, reply=None, denials=(), hook=True,
          after_tracker=None, after_extra=None, marker=None, after_head="h1", committed=(), src_edit=None, entries=None, outputs=None,
-         result_error=None):
+         result_error=None, hook_events=()):
     """A passing run. `after_tracker`: a dict, a raw text, NOTHING, SAME; default: what the case wants. `hook`: the report reaches the model.
     `entries`: the raw plugins[] of the init event. `outputs`: {command: (text, is_error)} replacing the tool_result of a Bash call.
-    `result_error`: a result subtype (such as error_max_budget_usd) for a result event with is_error set."""
+    `hook_events`: system events put right after init (hook_started/hook_response). `result_error`: a result subtype (such as error_max_budget_usd) for a result event with is_error set."""
     fixture = fixture or FIXTURE[expect]
     row = cases.Row(f"t-{expect}", expect, fixture, cases.parse_want(WANT.get(expect, "") if want is None else want), "p")
     before_files = fixtures.build(fixture)
     reminded = expect.startswith("reminded")
     before_tracker = json.loads(before_files[fixtures.TRACKER]) if fixtures.TRACKER in before_files else None
-    events = [init(plugins, skills, entries=entries)]
+    events = [init(plugins, skills, entries=entries), *hook_events]
     if reminded and hook:
         events.append(user_text(HOOK_REPORT))
     for name, tool_input in (CALLS[expect] if calls is None else calls):

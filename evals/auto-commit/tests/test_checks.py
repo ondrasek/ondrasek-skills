@@ -114,6 +114,26 @@ class Precondition(unittest.TestCase):
         events.insert(1, helpers.hook_event())
         self.assertFalse(checks.CHECKS["hook-report-delivered"](checks.Case(row, events, states))[1])
 
+    def test_a_stop_hook_that_failed_to_run_is_an_infrastructure_error_with_its_text_in_the_note(self):
+        # the shape seen when Claude Code ran inside a sandbox: exit_code 1, EPERM; even new commits cannot excuse a hook that crashed
+        for after in (AFTER_IS_BEFORE, None):
+            row, events, states = helpers.good("wip-preexisting", hook="none", **({"after": after} if after else {}))
+            events.insert(1, helpers.hook_started())
+            events.insert(2, helpers.hook_infra_error())
+            ok, note = checks.CHECKS["hook-report-delivered"](checks.Case(row, events, states))[1:]
+            self.assertFalse(ok)
+            self.assertIn("infrastructure error", note)
+            self.assertIn("exit_code 1", note)
+            self.assertIn("EPERM: operation not permitted", note)
+            self.assertNotIn("attributed by state only", note)
+
+    def test_a_failed_stop_hook_next_to_a_report_that_arrived_is_only_noted(self):
+        row, events, states = helpers.good("wip-preexisting", hook="event-only")
+        events.insert(2, helpers.hook_infra_error())
+        ok, note = checks.CHECKS["hook-report-delivered"](checks.Case(row, events, states))[1:]
+        self.assertTrue(ok)
+        self.assertIn("failed to run (not blocking, the report arrived): 1", note)
+
     def test_a_second_stop_hook_without_the_marker_is_not_a_second_report(self):
         row, events, states = helpers.good("wip-preexisting", hook="event-only")
         events.insert(2, {"type": "system", "subtype": "hook_response", "hook_event": "Stop", "exit_code": 0, "stderr": "milestones: nothing to report"})

@@ -471,14 +471,25 @@ def not_permission_blocked(case):
 @check("precondition", needs_states=False)
 def hook_report_delivered(case):
     """The hook spoke exactly once. The hook allows one continuation (stop_hook_active), so one marker-carrying Stop hook_response
-    event is expected; two mean a second hook with the same marker ran (e.g. a user-level copy): attribution to the plugin is void."""
+    event is expected; two mean a second hook with the same marker ran (e.g. a user-level copy): attribution to the plugin is void.
+
+    A Stop hook_response with an exit_code that is neither 0 nor 2 is an infrastructure error (the hook never ran, e.g. EPERM on the
+    plugin's data directory inside a sandbox): when no report reached the agent the check fails with the error text, so the trial is
+    INCONCLUSIVE with the cause in the note, and no commit the agent made on its own can excuse a hook that crashed. An erroring Stop
+    hook next to a report that did arrive (another hook, e.g. a user-level one) is only noted.
+    """
     kind = hook_trace.continuation(case.events, HOOK_MARK)
     stops = len(hook_trace.hook_responses(case.events, "Stop"))
     marked = len(hook_trace.marked_responses(case.events, "Stop", HOOK_MARK))
+    errors = hook_trace.hook_errors(case.events, "Stop")
     if marked > 1:
         return False, f"{marked} Stop hook_response events carry the marker {HOOK_MARK!r}: a second hook with the same report ran too, so the report cannot be attributed to the plugin under test"
+    if errors and kind == "none":
+        details = "; ".join(f"exit_code {e['exit_code']}: {hook_trace.error_text(e) or '(no output)'}" for e in errors[:2])
+        return False, f"infrastructure error: the Stop hook failed to run ({len(errors)} hook_response with an exit_code other than 0 and 2: {details}); run the trials outside the Claude Code sandbox"
     if kind != "none":
-        return True, f"the hook report reached the agent ({kind}); Stop hook_response events in the trace: {stops}, with the marker: {marked}"
+        return True, (f"the hook report reached the agent ({kind}); Stop hook_response events in the trace: {stops}, with the marker: {marked}"
+                      + (f"; Stop hooks that failed to run (not blocking, the report arrived): {len(errors)}" if errors else ""))
     if new_commits(case):
         return True, "attributed by state only: no trace of the hook report, but the agent made new commits"
     return False, f"no trace of the hook report and no new commit: the Stop hook never made the agent act (Stop hook_response events: {stops})"

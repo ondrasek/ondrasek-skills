@@ -38,9 +38,16 @@ UNIT = HERE.parent
 REPO = UNIT.parents[1]
 PLUGIN = REPO / "plugins" / "sitrep"
 # Write and Edit are granted on purpose, so that a write into the project can happen and be measured. report.sh is granted in the
-# two spellings SKILL.md gives it (the closing quote of the script path comes before the verb); open, xdg-open and start are not
-# granted, which should keep a browser window from opening (assuming dontAsk denies what is not granted: unconfirmed).
-ALLOWED = 'Skill,Read,Glob,Grep,Write,Edit,Bash(*report.sh *),Bash(*report.sh" *),Bash(ls *),Bash(cat *)'
+# two spellings SKILL.md gives it (the closing quote of the script path comes before the verb). The other Bash grants are read-only
+# helpers an agent chains while it looks around (ls, cat, git log/status/diff, head, tail, wc, grep, find): the first real run showed
+# that ONE compound command with an ungranted part (`git log | head`) is denied as a whole under dontAsk and the agent then never reaches
+# report.sh. Nothing that writes or runs code is granted (no sed, awk, tee, xargs, sh, python, node, bare git, env, curl, rm, mv, cp). Two
+# caveats that a Bash pattern cannot express: `find` can still be given -delete or -exec, and git log/diff accept --output=FILE; the
+# workspace is a throwaway repository and the snapshots (project-untouched) would show a write there. open, xdg-open and start are not
+# granted, which keeps a browser window from opening (dontAsk denies an ungranted Bash command: seen in the first real run).
+READ_ONLY_BASH = ("ls", "cat", "git log", "git status", "git diff", "head", "tail", "wc", "grep", "find")
+# each verb is granted with and without arguments: whether `Bash(head *)` also matches a bare `head` (as in `git log | head`) is unconfirmed
+ALLOWED = ("Skill,Read,Glob,Grep,Write,Edit,Bash(*report.sh *),Bash(*report.sh\" *)," + ",".join(f"Bash({verb} *),Bash({verb})" for verb in READ_ONLY_BASH))
 # `env -u` removes the variables the milestones plugin and the hooks would use to look at the repository this harness was started in:
 # runner_cmd.run can add to the environment but not remove from it. `project,local` is meant to keep the machine's user settings, hooks and
 # plugins out (the intent; whether it does is unconfirmed, see the README). Not --bare: `claude --help` says it skips hooks, plugin sync

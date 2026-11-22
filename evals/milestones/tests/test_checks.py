@@ -48,6 +48,7 @@ MUTATIONS = {
     "nothing-else-changed": ("show", dict(after_extra={"MILESTONES.md": "# Milestones\n"})),
     "tracker-created": ("create", dict(after_tracker=NEW_TRACKER)),
     "no-tracker-when-negative": ("none", dict(after_tracker=NEW_TRACKER)),
+    "hooks-ran": ("reminded-update", dict(hook_events=[helpers.HOOK_EPERM])),
     "reminder-fired": ("reminded-update", dict(marker=False)),
     "reminder-delivered": ("reminded-quiet", dict(hook=False)),
     "quiet-when-nothing-changed": ("reminded-quiet", dict(after_tracker=moved(tracker("stale-idle"), {2: "done"}))),
@@ -911,6 +912,83 @@ class Soft(unittest.TestCase):
 class Groups(unittest.TestCase):
     def test_every_group_is_used_and_known(self):
         self.assertEqual(set(checks.GROUPS.values()), {"precondition", "process", "gate", "outcome", "soft"})
+
+
+VAR_UPDATE = (f'S="{helpers.SCRIPT}"; python3 "$S" set 2 --state done --left "" && python3 "$S" set 3 --state doing && python3 "$S" show')
+
+
+class VariableForm(unittest.TestCase):
+    """The real runs called the script through a shell variable; a correct run of that shape must not look like a run without the script."""
+
+    def test_the_assigned_script_path_is_recognised(self):
+        self.assertEqual(checks.script_invocations(VAR_UPDATE), ["set", "set", "show"])
+        self.assertEqual(checks.script_invocations(f"S={helpers.SCRIPT} ; python3 ${{S}} show"), ["show"])
+
+    def test_a_variable_that_is_not_the_script_is_not_a_call(self):
+        self.assertEqual(checks.script_invocations('S="/tmp/other.py"; python3 "$S" set 2 --state done'), [])
+        self.assertEqual(checks.script_invocations('python3 "$S" set 2 --state done'), [])
+
+    def test_a_correct_update_in_that_form_passes_every_check(self):
+        calls = [SKILL_CALL, ("Bash", {"command": VAR_UPDATE})]
+        self.assertEqual(failed("update", calls=calls), [])
+
+    def test_a_tracker_path_held_in_a_variable_is_seen_as_a_write(self):
+        self.assertTrue(checks.writes_tracker('P=.cache/milestones.json; echo {} > "$P"'))
+        self.assertFalse(checks.writes_tracker('P=.cache/milestones.json; cat "$P"'))
+
+
+class WideGrantStaysMeasurable(unittest.TestCase):
+    """`Bash(python3 *)` is granted, so a python one-liner that writes the tracker is allowed to run: the gate must still see it."""
+
+    COMMANDS = [
+        "python3 -c \"import json; json.dump({}, open('.cache/milestones.json', 'w'))\"",
+        "python3 -c \"from pathlib import Path; Path('.cache/milestones.json').write_text('{}')\"",
+        "python3 -c \"open('.cache/milestones.json','w').write('{}')\"",
+        "python3 - <<'EOF'\nimport json\njson.dump({}, open('.cache/milestones.json', 'w'))\nEOF",
+        "T=.cache/milestones.json; python3 -c \"open('$T','w').write('{}')\"",
+    ]
+
+    def test_a_python_one_liner_writing_the_tracker_fails_no_direct_tracker_write(self):
+        for command in self.COMMANDS:
+            with self.subTest(command=command):
+                self.assertTrue(checks.writes_tracker(command))
+                self.assertEqual(failed("update", calls=helpers.CALLS["update"] + [("Bash", {"command": command})]), ["no-direct-tracker-write"])
+
+    def test_a_python_one_liner_that_only_reads_the_tracker_passes(self):
+        command = "python3 -c \"import json; print(json.load(open('.cache/milestones.json'))['title'])\""
+        self.assertFalse(checks.writes_tracker(command))
+        self.assertEqual(failed("update", calls=helpers.CALLS["update"] + [("Bash", {"command": command})]), [])
+
+
+class HookInfrastructureErrors(unittest.TestCase):
+    """An EPERM from a hook that never ran is the environment's fault: INCONCLUSIVE with the error text, never FAIL."""
+
+    def grade(self, expect, **override):
+        row, events, states = helpers.good(expect, **override)
+        return run_evals.grade_trial(row, events, states)
+
+    def test_a_stop_reminder_that_exits_two_is_not_an_infrastructure_error(self):
+        for expect in ("reminded-update", "reminded-quiet"):
+            trial = self.grade(expect, hook_events=[helpers.STOP_REMINDER])
+            self.assertEqual(trial["verdict"], "PASS", expect)
+
+    def test_a_hook_that_failed_to_run_is_inconclusive_with_the_error_text(self):
+        # the hook never ran: no marker, no report, no update
+        trial = self.grade("reminded-update", hook_events=[helpers.HOOK_EPERM], marker=False, hook=False, after_tracker=SAME, calls=[helpers.CALLS["reminded-update"][0]])
+        self.assertEqual(trial["verdict"], "INCONCLUSIVE")
+        notes = {c["id"]: c["notes"] for c in trial["checks"] if not c["pass"]}
+        self.assertEqual(set(notes), {"hooks-ran", "reminder-fired", "reminder-delivered", "wanted-state", "timestamps-by-script"})
+        self.assertIn("EPERM", notes["hooks-ran"])
+        self.assertIn("Stop hook failed (exit 1)", notes["hooks-ran"])
+
+    def test_the_quiet_case_is_inconclusive_too(self):
+        trial = self.grade("reminded-quiet", hook_events=[helpers.HOOK_EPERM], marker=False, hook=False)
+        self.assertEqual(trial["verdict"], "INCONCLUSIVE")
+
+    def test_an_infrastructure_error_never_hides_a_wrong_write(self):
+        trial = self.grade("reminded-update", hook_events=[helpers.HOOK_EPERM], marker=False, hook=False,
+                           calls=helpers.CALLS["reminded-update"] + [("Write", {"file_path": ".cache/milestones.json"})])
+        self.assertEqual(trial["verdict"], "FAIL")
 
 
 if __name__ == "__main__":
