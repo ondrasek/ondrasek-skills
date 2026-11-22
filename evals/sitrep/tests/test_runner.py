@@ -96,7 +96,7 @@ class Runner(unittest.TestCase):
         self.run_main()
         states = self.states()
         self.assertEqual(states["plugin"], str(run_evals.PLUGIN.resolve()))
-        self.assertEqual(set(states), {"layout", "plugin", "before", "after1", "after2", "tmp_sitrep", "report1", "report2"})
+        self.assertEqual(set(states), {"layout", "plugin", "before", "after1", "after2", "tmp_sitrep", "report1", "report2", "run_note"})
         report = states["report1"]
         self.assertEqual(os.path.dirname(report["dir"]), states["layout"]["tmp"])
         self.assertEqual((report["located_by"], report["exists"], sorted(report["files"])), ("trace", True, ["data.js", "index.html"]))
@@ -135,6 +135,22 @@ class Runner(unittest.TestCase):
         self.run_main()
         stream = io.StringIO()
         self.assertEqual(run_evals.main(["--cases", str(self.csv), "--fixtures", str(self.out)], stream), 0, stream.getvalue())
+
+    def test_the_runner_note_is_recorded_and_grades_offline(self):
+        """A claude process that printed a success result and then exited non-zero: INCONCLUSIVE live and when re-graded from the artifacts."""
+        self.run_main(mode="exits-nonzero")
+        self.assertIn("exited 3", self.states("n1")["run_note"])
+        live = self.trials()
+        self.assertEqual({v for v, _ in live.values()}, {"INCONCLUSIVE"})
+        stream, results = io.StringIO(), self.tmp / "regraded.json"
+        self.assertEqual(run_evals.main(["--cases", str(self.csv), "--fixtures", str(self.out), "--results", str(results)], stream), 1, stream.getvalue())
+        regraded = {p["id"]: (p["trials"][0]["verdict"], {c["id"] for c in p["trials"][0]["checks"] if not c["pass"]}) for p in json.loads(results.read_text())["prompts"]}
+        self.assertEqual(regraded, live)
+        self.assertIn("exited 3", stream.getvalue())
+
+    def test_a_good_run_records_an_empty_note(self):
+        self.run_main()
+        self.assertEqual(self.states()["run_note"], "")
 
     def test_a_recorded_bad_run_fails_offline(self):
         self.run_main(mode="edits-index")

@@ -38,6 +38,10 @@ class RealTable(unittest.TestCase):
         self.assertEqual(len({r.id for r in self.rows}), len(self.rows))
         self.assertGreaterEqual(sum(1 for r in self.rows if r.expect == "none"), 3)
 
+    def test_the_canary_is_the_first_row(self):
+        # a full `make eval` runs the rows in order: the case that needs the Stop hook to continue the session must tell first
+        self.assertEqual(self.rows[0].id, "reminder-finishes")
+
     def test_the_reminder_prompts_never_hint_at_the_outcome(self):
         # the outcome may come only from the hook's report: a prompt that mentions the tracker, git or saving would explain it
         for row in (r for r in self.rows if r.expect.startswith("reminded")):

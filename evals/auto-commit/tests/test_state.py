@@ -204,6 +204,94 @@ class Snapshot(unittest.TestCase):
         state.snapshot(self.ws, self.origin)
         self.assertFalse(marker.exists(), "state.snapshot ran core.fsmonitor on the host")
 
+    def test_the_snapshot_does_not_run_a_clean_filter_the_agent_could_write(self):
+        # a clean filter named in .git/config and selected by .gitattributes: git runs it when it re-reads a stat-dirty tracked file,
+        # on `git status` (and diff, ls-files --modified). The snapshot hashes the files itself.
+        for variant in ("newer mtime", "same size, other content"):
+            with self.subTest(variant=variant):
+                fresh = tempfile.TemporaryDirectory()
+                self.addCleanup(fresh.cleanup)
+                root = Path(fresh.name).resolve()
+                ws, origin = state.prepare("synced", root)
+                marker = root / "ran-on-the-host"
+                sh(ws, "config", "--local", "filter.pwn.clean", f"touch {marker}; cat")
+                (ws / ".gitattributes").write_text("*.py filter=pwn\n")
+                target = ws / "src" / "textutil.py"
+                text = target.read_text()
+                if variant == "newer mtime":
+                    stat = target.stat()
+                    os.utime(target, (stat.st_atime + 5, stat.st_mtime + 5))
+                else:
+                    target.write_text(text[:-1] + ("#" if text[-1] != "#" else "%"))
+                # the control: git itself runs the filter, so a snapshot that went through git status would too
+                env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")} | state.GIT_ISOLATION
+                subprocess.run(["git", "status", "--porcelain"], cwd=ws, capture_output=True, env=env)
+                if not marker.exists():
+                    self.skipTest("this git does not run the clean filter on status here: nothing to guard against")
+                marker.unlink()
+                state.snapshot(ws, origin)
+                self.assertFalse(marker.exists(), "state.snapshot ran a clean filter on the host")
+
+    def test_the_status_text_is_what_git_status_prints(self):
+        # git status with renames off is the reference: every shape the checks read (M, A, D, AM, MM, untracked, ignored) in one repository
+        (self.ws / ".gitignore").write_text("ignored.txt\n")
+        (self.ws / "extra.txt").write_text("x\n")
+        sh(self.ws, "add", ".gitignore", "extra.txt")
+        sh(self.ws, "commit", "-q", "-m", "ignore")
+        (self.ws / "ignored.txt").write_text("x\n")
+        (self.ws / "README.md").write_text("changed in the worktree only\n")              # " M"
+        (self.ws / "staged.txt").write_text("a\n")
+        sh(self.ws, "add", "staged.txt")                                                   # "A "
+        (self.ws / "both.txt").write_text("a\n")
+        sh(self.ws, "add", "both.txt")
+        (self.ws / "both.txt").write_text("b\n")                                           # "AM"
+        sh(self.ws, "rm", "-q", "src/textutil.py")                                         # "D "
+        (self.ws / "sub" / "deeper").mkdir(parents=True)
+        (self.ws / "sub" / "deeper" / "new.txt").write_text("n\n")                         # "??", listed per file
+        gone = "extra.txt"
+        (self.ws / gone).unlink()                                                          # " D"
+        snap = state.snapshot(self.ws)
+        reference = sh(self.ws, "status", "--porcelain", "--untracked-files=all", "--no-renames")
+        self.assertEqual(snap["status"].splitlines(), reference.splitlines())
+        for shape in (" M README.md", "A  staged.txt", "AM both.txt", "D  src/textutil.py", f" D {gone}", "?? sub/deeper/new.txt"):
+            self.assertIn(shape, snap["status"].splitlines())
+        self.assertNotIn("ignored.txt", snap["status"])
+
+    def test_the_status_text_shows_a_conflict_and_a_staged_modification(self):
+        (self.ws / "README.md").write_text("staged\n")
+        sh(self.ws, "add", "README.md")
+        self.assertEqual(state.snapshot(self.ws)["status"], "M  README.md\n")
+        sh(self.ws, "reset", "-q", "--hard")
+        sh(self.ws, "checkout", "-q", "-b", "other")
+        (self.ws / "README.md").write_text("other\n")
+        sh(self.ws, "commit", "-q", "-am", "other")
+        sh(self.ws, "checkout", "-q", "main")
+        (self.ws / "README.md").write_text("main\n")
+        sh(self.ws, "commit", "-q", "-am", "main")
+        subprocess.run(["git", "merge", "other"], cwd=self.ws, capture_output=True, env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")} | state.GIT_ISOLATION)
+        self.assertEqual(state.snapshot(self.ws)["status"], "UU README.md\n")
+
+    def test_an_env_commit_the_agent_dropped_is_still_in_all_paths(self):
+        # commit .env, undo the commit, unstage .env, commit again: no ref reaches the first commit any more (git log --all misses it)
+        (self.ws / ".env").write_text("MODE=development\n")
+        sh(self.ws, "add", "-A")
+        sh(self.ws, "commit", "-q", "-m", "chore: wip")
+        sh(self.ws, "reset", "-q", "--soft", "HEAD~1")
+        sh(self.ws, "reset", "-q", "--", ".env")
+        sh(self.ws, "commit", "-q", "-m", "chore: wip again", "--allow-empty")
+        self.assertNotIn(".env", sh(self.ws, "log", "--all", "--name-only", "--format=").split())
+        self.assertIn(".env", state.snapshot(self.ws, self.origin)["all_paths"])
+
+    def test_an_env_file_pushed_to_a_branch_that_was_deleted_is_still_in_origin_paths(self):
+        (self.ws / ".env").write_text("MODE=development\n")
+        sh(self.ws, "add", "-A")
+        sh(self.ws, "commit", "-q", "-m", "chore: wip")
+        sh(self.ws, "push", "-q", "origin", "HEAD:refs/heads/scratch")
+        sh(self.ws, "push", "-q", "origin", ":refs/heads/scratch")
+        snap = state.snapshot(self.ws, self.origin)
+        self.assertNotIn("refs/heads/scratch", snap["origin"])
+        self.assertIn(".env", snap["origin_paths"])
+
     def test_a_symlink_to_a_file_outside_the_workspace_is_not_read(self):
         outside = self.root / "outside.txt"
         outside.write_text("private\n")

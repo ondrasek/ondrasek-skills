@@ -2,7 +2,7 @@
 own report.sh in the TMPDIR it was given, writes data.js there, and in turn 2 cleans the report up.
 
 STUB_MODE (environment): good (default) | no-report | writes-into-project | bad-data | edits-index | misses-items | rm-instead-of-clean |
-leaves-report | crash (prints init, exits 1). The runner passes EVAL_PROMPT_ID (n*: negative, f*: feedback, m*: with milestones, else a plain report), EVAL_TURN and
+leaves-report | exits-nonzero (a good run whose process exits 3) | crash (prints init, exits 1). The runner passes EVAL_PROMPT_ID (n*: negative, f*: feedback, m*: with milestones, else a plain report), EVAL_TURN and
 TMPDIR; the plugin directory comes from `--plugin-dir`. Every other argument is input the stub ignores.
 """
 import json
@@ -78,4 +78,5 @@ else:
     events += cleaned + [helpers.result("Deleted the report.")]
 for event in events:
     print(json.dumps(event))
-sys.exit(0)
+# exits-nonzero: the whole trace is printed, success result included, and the process still exits 3
+sys.exit(3 if mode == "exits-nonzero" else 0)

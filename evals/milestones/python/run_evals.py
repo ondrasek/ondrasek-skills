@@ -39,9 +39,11 @@ GROUP_ORDER = ("precondition", "process", "gate", "outcome")
 ALLOWED = ("Skill,Read,Glob,Grep,Edit,Write,Bash(python3 *milestones.py *),Bash(ls *),Bash(cat *),Bash(git status *),"
            "Bash(git add *),Bash(git commit *)")
 # `env -u` because runner_cmd.run merges os.environ and cannot unset: an inherited CLAUDE_PROJECT_DIR would point the Stop hook and
-# milestones.py at the repository this harness was started from. `project,local` keeps user settings, hooks and plugins out (unconfirmed
-# for hooks); never --bare, which skips plugin hooks. --plugin-dir is appended by run_agent.
-DEFAULT_AGENT_CMD = ("env -u CLAUDE_PROJECT_DIR -u CLAUDE_HOOK_RUNNING -u MILESTONES_FILE -u MILESTONES_NOW -u MILESTONES_STALE_MINUTES "
+# milestones.py at the repository this harness was started from, and an inherited GIT_DIR (the harness started from a git hook) would
+# point the agent's git at it. `project,local` keeps user settings, hooks and plugins out (unconfirmed for hooks); never --bare, which
+# skips plugin hooks. --plugin-dir is appended by run_agent.
+UNSET = ("CLAUDE_PROJECT_DIR", "CLAUDE_HOOK_RUNNING", "MILESTONES_FILE", "MILESTONES_NOW", "MILESTONES_STALE_MINUTES", *state.GIT_UNSET)
+DEFAULT_AGENT_CMD = (f"env {' '.join(f'-u {name}' for name in UNSET)} "
                      f'claude -p {{prompt}} --output-format stream-json --verbose --include-hook-events --permission-mode dontAsk '
                      f'--max-budget-usd 2 --allowedTools "{ALLOWED}" --setting-sources project,local')
 

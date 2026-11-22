@@ -33,12 +33,18 @@ TRACKER = ".cache/milestones.json"
 MKDIR_RE = re.compile(r"(?<![\w-])(mkdir|mktemp)\s")
 # rm, rmdir, unlink (also as /bin/rm, or after `||`, `;`, `&&`), find ... -delete and rmtree; the lookbehind rejects only names that merely end in rm
 RM_RE = re.compile(r"(?<![\w.-])(?:rm|rmdir|unlink)\s|\bfind\s[^|;&\n]*-delete\b|\brmtree\b")
-BLOCKED_RE = re.compile(r"report\.sh|data\.js")
+SCRIPT_TOKEN_RE = re.compile(r"[^\s\"'`;|&()<>]*report\.sh")   # a word that ends in report.sh (a path, or the bare name)
+DATA_JS_PATH_RE = re.compile(r"(?:^|/)data\.js$")                 # a file_path of a Write or Edit
+DATA_JS_ALONE_RE = re.compile(r"\S*(?:^|/)data\.js")             # fullmatch: a string that is only a path (denials of unknown shape)
+GUARDED_TOOLS = ("Bash", "Write", "Edit")
 # how a refusal might read in a tool_result (the wording is unconfirmed: README item 1)
+REFUSING_RE = re.compile(r"refusing to delete")      # what report.sh clean prints when it declines (plugins/sitrep/skills/sitrep/scripts/report.sh)
 REFUSED_RE = re.compile(r"permission|not allowed|denied|not granted|disallowed|requires approval|not permitted", re.IGNORECASE)
 LIST_LINE_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+", re.MULTILINE)
 MAX_LIST_LINES = 4
-MAX_ITEM_MENTIONS = 2     # the reply may name two items in passing; three or more is the list pasted into chat
+MAX_ITEM_UNITS = 2        # lines and sentences of the reply that name a planted topic or an item title: more is the list pasted into chat
+MAX_REPLY_CHARS = 1500    # a hand-over is two or three lines (SKILL.md step 3); a longer reply is a report pasted into chat (a guess: README item 4)
+UNIT_SPLIT_RE = re.compile(r"\n+|(?<=[.!?])\s+")
 NEGATIVE_WRITES_RE = re.compile(r"\.html?$|(^|/)data\.js$|sitrep", re.IGNORECASE)
 
 GROUPS = {
@@ -138,10 +144,23 @@ def _same_path(a, b):
     return os.path.realpath(a) == os.path.realpath(b)
 
 
+def _script_call(command):
+    """True for a `report.sh new` or `report.sh clean` call (the two verbs of the script)."""
+    return bool(state.REPORT_NEW_RE.search(command) or state.REPORT_CLEAN_RE.search(command))
+
+
+def _outside_plugin(command, plugin):
+    """The absolute (or ~) report.sh paths of `command` that do not lie under `plugin`. A relative or `$VAR` path is not judged: it may
+    follow a `cd`, and the init event's plugin path is what tells the copies apart."""
+    root, real = plugin.rstrip("/") + "/", os.path.realpath(plugin).rstrip("/") + "/"
+    return [t for t in SCRIPT_TOKEN_RE.findall(command)
+            if t.startswith(("/", "~")) and not t.startswith(root) and not os.path.realpath(t).startswith(real)]
+
+
 def skill_loaded(case):
     """The plugin under test loaded and nothing else answers to its name: exactly one plugin named `sitrep` whose path is the
     --plugin-dir of the run (recorded as states["plugin"]; a recording without it skips the path test) and, when the trace ran
-    report.sh, only a report.sh under that directory. An installed copy of the plugin would otherwise be graded as the working copy."""
+    report.sh by an absolute path, only a report.sh under that directory. An installed copy of the plugin would otherwise be graded as the working copy."""
     skills = trace.init_skills(case.events)
     if skills is None:
         return "skill-loaded", False, "the trace has no system/init event"
@@ -156,9 +175,7 @@ def skill_loaded(case):
     if plugin and len(entries) == 1 and not _same_path(entries[0], plugin):
         problems.append(f"the loaded plugin is at {entries[0]!r}, not at the --plugin-dir {plugin!r}")
     if plugin:
-        elsewhere = [c[:70] for _, c in hook_trace.bash_commands(case.events)
-                     if (state.REPORT_NEW_RE.search(c) or state.REPORT_CLEAN_RE.search(c))
-                     and plugin.rstrip("/") + "/" not in c and os.path.realpath(plugin).rstrip("/") + "/" not in c]
+        elsewhere = [c[:70] for _, c in hook_trace.bash_commands(case.events) if _script_call(c) and _outside_plugin(c, plugin)]
         if elsewhere:
             problems.append(f"report.sh ran from outside {plugin!r}: {elsewhere}")
     note = f"plugins {names}, {len(skills)} skills listed; " + ("; ".join(problems) or f"{SKILL} loaded from the plugin under test" + ("" if plugin else " (no --plugin-dir recorded: path not compared)"))
@@ -171,11 +188,22 @@ def skill_trigger(case):
     return "skill-trigger", ok, f"Skill calls for {SKILL}: {len(invoked)}; should_trigger={case.row.should_trigger}"
 
 
+def _cleaned_in_turn_one(case):
+    """The `report.sh clean` calls of turn 1 that name the report directory (any, when none was recorded): the user has not said they
+    are done yet, so the skill removed the report before they could look at it."""
+    directory = case.report.get("dir")
+    name = os.path.basename(directory) if directory else ""
+    return [c[:60] for _, c in hook_trace.bash_commands(case.turns[0]) if state.REPORT_CLEAN_RE.search(c) and (not name or name in c)]
+
+
 def created_by_script(case):
+    """The report was made by `report.sh new`, not by hand, and kept for the user (not cleaned in the same turn)."""
     commands = [c for _, c in hook_trace.bash_commands(case.turns[0])]
     ran = any(state.REPORT_NEW_RE.search(c) for c in commands)
     by_hand = [c[:60] for c in commands if MKDIR_RE.search(c)]
-    return "created-by-script", ran and not by_hand, f"`report.sh new` {'ran' if ran else 'did NOT run'} in turn 1; mkdir/mktemp calls: {by_hand or 'none'}"
+    early = _cleaned_in_turn_one(case)
+    return "created-by-script", ran and not by_hand and not early, \
+        f"`report.sh new` {'ran' if ran else 'did NOT run'} in turn 1; mkdir/mktemp calls: {by_hand or 'none'}; `report.sh clean` in turn 1 (before the user is done): {early or 'none'}"
 
 
 def cleaned_by_script(case):
@@ -183,10 +211,13 @@ def cleaned_by_script(case):
     if not directory or len(case.turns) < 2:
         return "cleaned-by-script", False, "no report directory was recorded or the run has no second turn"
     name = os.path.basename(directory)
-    commands = [c for _, c in hook_trace.bash_commands(case.turns[1]) if name in c]
-    cleaned = [c for c in commands if state.REPORT_CLEAN_RE.search(c)]
-    removed = [c[:60] for c in commands if RM_RE.search(c)]
-    return "cleaned-by-script", bool(cleaned) and not removed, f"`report.sh clean` calls naming {name} in turn 2: {len(cleaned)}; rm calls naming it: {removed or 'none'}"
+    results = hook_trace.tool_results(case.turns[1])
+    calls = hook_trace.bash_commands(case.turns[1])
+    # a clean call whose result says the script refused does not count; a removal counts when it names the directory or any sitrep.* path (a glob)
+    cleaned = [c for call_id, c in calls if name in c and state.REPORT_CLEAN_RE.search(c) and REFUSING_RE.search(results.get(call_id, "")) is None]
+    removed = [c[:60] for _, c in calls if RM_RE.search(c) and (name in c or "sitrep" in c)]
+    return "cleaned-by-script", bool(cleaned) and not removed, \
+        f"`report.sh clean` calls naming {name} in turn 2 that the script did not refuse: {len(cleaned)}; rm calls naming it or a sitrep.* path: {removed or 'none'}"
 
 
 # ---- precondition ------------------------------------------------------------------------------------------
@@ -203,43 +234,81 @@ def run_completed(case):
     return "run-completed", not problems, "; ".join(problems) or f"{expected} turn(s), each ended in a success result"
 
 
+def _strings(value):
+    """Every string inside a JSON-like value."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [t for v in value.values() for t in _strings(v)]
+    if isinstance(value, list):
+        return [t for v in value for t in _strings(v)]
+    return []
+
+
+def call_kinds(name, tool_input):
+    """What a call of tool `name` touches that matters here: "script" (a Bash `report.sh new` or `clean`) and "data" (a Write or Edit of
+    a data.js). A command that merely mentions data.js (`node --check .../data.js`) or report.sh (`cat report.sh`) touches neither."""
+    kinds = set()
+    if name == "Bash" and _script_call(str(tool_input.get("command", ""))):
+        kinds.add("script")
+    if name in ("Write", "Edit") and DATA_JS_PATH_RE.search(str(tool_input.get("file_path", "")).strip()):
+        kinds.add("data")
+    return kinds
+
+
+def denial_kinds(denial):
+    """call_kinds of one permission_denials element. Its shape is unconfirmed (README item 7): tool_name and tool_input are used when
+    they are there, otherwise every string in it is read as a command (a report.sh call) or as a bare path (a data.js)."""
+    name, tool_input = denial.get("tool_name", ""), denial.get("tool_input")
+    if name in GUARDED_TOOLS and isinstance(tool_input, dict):
+        return call_kinds(name, tool_input)
+    if name not in ("",) + GUARDED_TOOLS:
+        return set()
+    strings = _strings(denial)
+    return ({"script"} if any(_script_call(t) for t in strings) else set()) | ({"data"} if any(DATA_JS_ALONE_RE.fullmatch(t.strip()) for t in strings) else set())
+
+
 def _refusals(case):
-    """Calls that touch report.sh or data.js (Bash, Write, Edit) whose result reads like a refusal: a denial that arrives as tool_result text."""
+    """Calls that run report.sh or write data.js (Bash, Write, Edit) whose result reads like a refusal: a denial that arrives as tool_result text."""
     results = {}
     for turn in case.turns:
         results.update(hook_trace.tool_results(turn))
     return [f"{name}: {results[call_id].strip()[:70]!r}" for call_id, name, tool_input in hook_trace.tool_uses(case.events)
-            if name in ("Bash", "Write", "Edit") and BLOCKED_RE.search(json.dumps(tool_input)) and REFUSED_RE.search(results.get(call_id, "")[:300])]
+            if call_kinds(name, tool_input) and REFUSED_RE.search(results.get(call_id, "")[:300])]
 
 
 def not_permission_blocked(case):
-    """A denial of report.sh or of a write of data.js; denials of open/xdg-open/start are expected (they are not granted).
+    """A denial of `report.sh new` or `clean` or of a Write or Edit of a data.js; denials of open/xdg-open/start are expected (they are
+    not granted), and so is a denial of any other command that only names data.js (`node --check .../data.js`): the skill is not at fault.
 
-    Read from result.permission_denials, from system permission_denied events and from tool_results of Bash, Write and Edit calls that
-    name report.sh or data.js and read like a refusal (neither channel is confirmed to carry the denial: README item 1)."""
+    Read from result.permission_denials, from system permission_denied events and from tool_results of such calls that read like a
+    refusal (neither channel is confirmed to carry the denial: README item 1)."""
     denials = [d for turn in case.turns for d in hook_trace.permission_denials(turn)]
-    blocked = [d for d in denials if d.get("tool_name", "") in ("Bash", "Write", "Edit", "") and BLOCKED_RE.search(json.dumps(d))]
+    blocked = [d for d in denials if denial_kinds(d)]
     refused = _refusals(case)
     return "not-permission-blocked", not blocked and not refused, \
-        f"permission denials: {len(denials)}; of report.sh or data.js: {len(blocked)} {[json.dumps(d)[:80] for d in blocked]}; tool results that read as a refusal: {refused or 'none'}"
+        f"permission denials: {len(denials)}; of report.sh or a data.js write: {len(blocked)} {[json.dumps(d)[:80] for d in blocked]}; tool results that read as a refusal: {refused or 'none'}"
 
 
 def report_attempted(case):
     """True when turn 1 ran `report.sh new` (or the permission system refused it)."""
     commands = [c for _, c in hook_trace.bash_commands(case.turns[0])]
     return any(state.REPORT_NEW_RE.search(c) for c in commands) or any(
-        "report.sh" in json.dumps(d) for d in hook_trace.permission_denials(case.turns[0]))
+        "script" in denial_kinds(d) for d in hook_trace.permission_denials(case.turns[0]))
 
 
 def report_located(case):
     """The report directory was found. A precondition only when report.sh was tried: a skill that never ran step 2 has no report to
-    locate, and `created-by-script` then decides (a finding about the skill, not about the environment)."""
+    locate, and `created-by-script` then decides (a finding about the skill, not about the environment). The same when the skill removed
+    the report itself in turn 1 with `report.sh clean`: the report is gone because of the skill."""
     directory = case.report.get("dir")
     exists = bool(directory) and bool(case.report.get("exists"))
     attempted = report_attempted(case)
-    ok = exists or not attempted
+    cleaned = _cleaned_in_turn_one(case)
+    ok = exists or not attempted or bool(cleaned)
     return "report-located", ok, f"report directory {directory} ({case.report.get('located_by', 'no record')}), exists={case.report.get('exists')}" \
-        + ("" if attempted else "; report.sh new was never run, so there is nothing to locate (created-by-script decides)")
+        + ("" if attempted else "; report.sh new was never run, so there is nothing to locate (created-by-script decides)") \
+        + ("; the skill ran report.sh clean in turn 1, which is why the report is gone (created-by-script decides)" if cleaned and not exists else "")
 
 
 # ---- gate --------------------------------------------------------------------------------------------------
@@ -346,28 +415,31 @@ MIGRATION_TITLE_RE = re.compile(r"migrat")
 DB_TITLE_RE = re.compile(r"postgres|sqlite|database|\bdb\b")
 
 
-def _item_kind(item):
-    """'migration' or 'db' (or '' when unclear): the title decides, the detail only when the title names neither."""
+def _item_kinds(item):
+    """The roles an item can play, a subset of {"migration", "db"}: the title decides (both roles when it names both topics, as in
+    'Postgres or SQLite (blocks the migration)'), the detail only when the title names neither and then only if it names one topic."""
     title, detail = str(item.get("title", "")).lower(), str(item.get("detail", "")).lower()
-    if MIGRATION_TITLE_RE.search(title):
-        return "migration"
-    if DB_TITLE_RE.search(title):
-        return "db"
+    kinds = ({"migration"} if MIGRATION_TITLE_RE.search(title) else set()) | ({"db"} if DB_TITLE_RE.search(title) else set())
+    if kinds:
+        return kinds
     in_migration, in_db = bool(re.search(fixtures.PLANTED["migration"], detail)), bool(re.search(fixtures.PLANTED["db"], detail))
-    return "migration" if in_migration and not in_db else "db" if in_db and not in_migration else ""
+    return {"migration"} if in_migration and not in_db else {"db"} if in_db and not in_migration else set()
 
 
 def dependency_recorded(case):
-    """A migration item lists a database item in dependsOn, and the database item does not depend on it back. Each item is classified once
-    (by its title, see _item_kind), so a reversed dependency, or an item that mentions both topics, does not count."""
-    kinds = {i["id"]: _item_kind(i) for i in case.items if isinstance(i.get("id"), str)}
+    """A migration item lists a different database item in dependsOn, and the database item does not depend on it back. An item's roles
+    come from its title first (see _item_kinds), so a dependency recorded backwards, or between two items that only mention each other's
+    topic in their details, does not count; an item whose title names both topics may play either role."""
+    kinds = {i["id"]: _item_kinds(i) for i in case.items if isinstance(i.get("id"), str)}
     byid = {i["id"]: i for i in case.items if isinstance(i.get("id"), str)}
 
     def deps(item):
         return set(item["dependsOn"]) if isinstance(item.get("dependsOn"), list) else set()
 
-    linked = [f"{m} -> {d}" for m, kind in kinds.items() if kind == "migration" for d in sorted(deps(byid[m])) if kinds.get(d) == "db" and m not in deps(byid[d])]
-    return "dependency-recorded", bool(linked), f"item kinds {kinds}; migration item depending on a database item (and not the reverse): {linked or 'none'}"
+    linked = [f"{m} -> {d}" for m, roles in kinds.items() if "migration" in roles for d in sorted(deps(byid[m]))
+              if d != m and "db" in kinds.get(d, ()) and m not in deps(byid[d])]
+    shown = {i: sorted(k) for i, k in kinds.items()}
+    return "dependency-recorded", bool(linked), f"item roles {shown}; migration item depending on a different database item (and not the reverse): {linked or 'none'}"
 
 
 def start_here_set(case):
@@ -391,20 +463,26 @@ def milestone_strip(case):
     return "milestone-strip", ok, f"milestones: done {ms.get('done')}, total {ms.get('total')}, current {ms.get('current')!r} (1, 4, 'Storage layer' expected)"
 
 
+def _mentions(unit, titles):
+    lower = unit.lower()
+    return any(re.search(pattern, lower) for pattern in fixtures.PLANTED.values()) or any(t in lower for t in titles)
+
+
 def reply_hands_over(case):
     """The reply names the report directory (its sitrep.XXXXXX name), mentions Copy JSON and does not paste the list: at most four list
-    lines and at most two of the planted topics or item titles of data.js named (a table or bold lines pasting every item is caught)."""
+    lines, at most MAX_REPLY_CHARS characters and at most two units (a line or a sentence) that name a planted topic or an item title of
+    data.js. A table row, a bold line or a sentence per item is a unit each, so pasting the list is caught; the one-sentence summary
+    SKILL.md step 3 asks for ('5 open items: 2 decisions (Postgres vs SQLite, SSO vendor), ...') is one unit, however many topics it names."""
     reply, directory = case.reply1, case.report.get("dir")
     name = os.path.basename(directory) if directory else ""
     handed = bool(name) and bool(re.search(re.escape(name) + r"(?![A-Za-z0-9])", reply))
     copy_json, listed = bool(re.search(r"copy\s+json", reply, re.IGNORECASE)), len(LIST_LINE_RE.findall(reply))
-    lower = reply.lower()
-    topics = [key for key, pattern in fixtures.PLANTED.items() if re.search(pattern, lower)]
-    titles = [t for t in (str(i.get("title", "")).strip() for i in case.items) if len(t) >= 4 and t.lower() in lower]
-    mentions = max(len(topics), len(titles))
-    ok = handed and copy_json and listed <= MAX_LIST_LINES and mentions <= MAX_ITEM_MENTIONS
+    titles = [t for t in (str(i.get("title", "")).strip().lower() for i in case.items) if len(t) >= 4]
+    units = [u for u in UNIT_SPLIT_RE.split(reply) if u.strip()]
+    naming = sum(1 for u in units if _mentions(u, titles))
+    ok = handed and copy_json and listed <= MAX_LIST_LINES and naming <= MAX_ITEM_UNITS and len(reply) <= MAX_REPLY_CHARS
     return "reply-hands-over", ok, (f"names the report directory {name or '(none recorded)'}: {handed}; mentions Copy JSON: {copy_json}; list lines: {listed} (at most {MAX_LIST_LINES}); "
-                                     f"planted topics named {topics}, item titles named {len(titles)} (at most {MAX_ITEM_MENTIONS}: the list is not pasted)")
+                                     f"lines or sentences naming a planted topic or item title: {naming} (at most {MAX_ITEM_UNITS}: the list is not pasted); length {len(reply)} (at most {MAX_REPLY_CHARS})")
 
 
 def report_cleaned(case):

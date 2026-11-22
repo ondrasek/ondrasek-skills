@@ -219,7 +219,9 @@ class Grading(unittest.TestCase):
         tokens = shlex.split(run_evals.DEFAULT_AGENT_CMD)
         self.assertEqual(tokens[:2], ["env", "-u"])
         unset = {tokens[i + 1] for i, t in enumerate(tokens[:-1]) if t == "-u"}
-        self.assertEqual(unset, {"CLAUDE_PROJECT_DIR", "CLAUDE_HOOK_RUNNING", "MILESTONES_FILE", "MILESTONES_NOW", "MILESTONES_STALE_MINUTES"})
+        self.assertEqual(unset, {"CLAUDE_PROJECT_DIR", "CLAUDE_HOOK_RUNNING", "MILESTONES_FILE", "MILESTONES_NOW", "MILESTONES_STALE_MINUTES",
+                                 "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
+                                 "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_PREFIX"})
         self.assertIn("--include-hook-events", tokens)
         self.assertIn("--verbose", tokens)
         self.assertNotIn("--bare", tokens)

@@ -4,7 +4,7 @@ import unittest
 
 import helpers  # noqa: F401  (puts python/ on the path: first)
 import checks
-from helpers import CLEAN, DIR, GOOD_REPLY, LISTED_REPLY, NEW, PLUGIN, REPORT_CALLS, SKILL, TRACKER, WS
+from helpers import CLEAN, CLEAN_CALLS, DIR, GOOD_REPLY, LISTED_REPLY, NEW, PLUGIN, REPORT_CALLS, SCRIPT, SKILL, TRACKER, WS
 
 
 def data_with(ms=False, **change):
@@ -107,17 +107,34 @@ TABLE = "\n\n| # | item |\n|---|---|\n" + "\n".join(f"| {n} | {t} |" for n, t in
 BOLD = "\n" + "\n".join(f"**#{n} {t}**" for n, t in enumerate(("Pick the database", "SSO vendor", "Font licences", "Data retention", "Schema migration"), 1))
 DENIED_WRITE = [("Skill", {"skill": SKILL}), ("Bash", {"command": NEW}, DIR + "\n"),
                 ("Write", {"file_path": DIR + "/data.js", "content": "..."}, "Claude requested permissions to write to data.js, but you haven't granted it yet.")]
+WRITE_DENIAL = [{"tool_name": "Write", "tool_input": {"file_path": DIR + "/data.js"}}]
+# commands that only name report.sh or data.js are not what the skill needs permission for: a denial of them says nothing about the skill
+NODE_CHECK = f"node --check {DIR}/data.js"
+NODE_DENIED = REPORT_CALLS + [("Bash", {"command": NODE_CHECK}, "Permission to use Bash with command node --check has been denied.")]
+NODE_DENIAL = [{"tool_name": "Bash", "tool_input": {"command": NODE_CHECK}}]
 RM_DENIED = REPORT_CALLS + [("Bash", {"command": f"rm {DIR}/data.js"}, "Permission to use Bash has been denied.")]
 RM_DENIAL = [{"tool_name": "Bash", "tool_input": {"command": f"rm {DIR}/data.js"}}]
+# a clean call in turn 1: the report was removed before the user said they were done
+EARLY_CLEAN = REPORT_CALLS + [("Bash", {"command": CLEAN}, f"deleted {DIR}\n")]
+GONE = helpers.state.report_record(DIR, None, helpers.TEMPLATE_SHA, "trace, but the directory is gone")
+REFUSED_CLEAN = [("Bash", {"command": f"{SCRIPT_Q} clean {DIR}/"}, "refusing to delete: " + DIR + "/\n"), ("Bash", {"command": 'rm -rf "$TMPDIR"/sitrep.*'}, "")]
+SPOKEN_SUMMARY = (f"The report is at {DIR}/index.html. 5 open items: 2 decisions (Postgres vs SQLite, SSO vendor), 1 risk (licence audit), "
+                  "1 question (retention), 1 blocker (schema migration). Start with the database decision. Press Copy JSON to send your comments back.")
 # (label, check id, expect, override, cascade): further failing runs of a check, the reviewer's and the ones a check was fixed for
 MORE_MUTATIONS = [
     ("a turn that ends in an error result", "run-completed", "feedback", dict(result_subtype="error_during_execution"), set()),
     ("a refusal that reaches the trace only as tool_result text", "not-permission-blocked", "report", dict(calls1=DENIED_WRITE, omit_data=True), NO_DATA),
-    ("a refused rm of data.js plus an edited index.html", "index-untouched", "report", dict(calls1=RM_DENIED, denials=RM_DENIAL, index="<html>edited</html>\n"), {"not-permission-blocked"}),
+    ("a refused write of data.js plus an edited index.html", "index-untouched", "report", dict(denials=WRITE_DENIAL, index="<html>edited</html>\n"), {"not-permission-blocked"}),
     ("a table of every item in the reply", "reply-hands-over", "report", dict(reply1=GOOD_REPLY + TABLE), set()),
     ("bold lines of every item in the reply", "reply-hands-over", "report", dict(reply1=GOOD_REPLY + BOLD), set()),
+    ("a sentence per item in the reply", "reply-hands-over", "report",
+     dict(reply1=GOOD_REPLY + " Postgres or SQLite is open. The SSO vendor is open. The licence audit is open. Retention is open. The migration waits."), set()),
+    ("a reply that pastes the list as one long paragraph", "reply-hands-over", "report", dict(reply1=GOOD_REPLY + " Details: " + "Postgres needs operations, SQLite has one writer. " * 40), set()),
     ("a reply that says index.html but names no directory", "reply-hands-over", "report", dict(reply1="I could not open index.html. Copy JSON is not available here."), set()),
     ("a dependency recorded backwards", "dependency-recorded", "report", dict(data=reversed_dependency()), set()),
+    ("the report cleaned in the turn that made it", "created-by-script", "report", dict(calls1=EARLY_CLEAN, report_patch=GONE), NO_REPORT - {"created-by-script", "report-outside-project", "reply-hands-over"}),
+    ("a refused clean followed by rm on a sitrep.* glob", "cleaned-by-script", "report-clean", dict(calls2=REFUSED_CLEAN), set()),
+    ("a clean call the script refused", "cleaned-by-script", "report-clean", dict(calls2=REFUSED_CLEAN[:1]), set()),
     ("the compound `clean || /bin/rm -rf`", "cleaned-by-script", "report-clean", dict(calls2=[("Bash", {"command": f"{SCRIPT_Q} clean {DIR} || /bin/rm -rf {DIR}"}, "")]), set()),
     ("find -delete instead of clean", "cleaned-by-script", "report-clean", dict(calls2=[("Bash", {"command": f"find {DIR} -delete"}, "")]), set()),
     ("the retention item dropped, the word kept in another item", "items-cover-planted", "report",
@@ -125,6 +142,8 @@ MORE_MUTATIONS = [
     ("a data.js that starts with an import", "data-parses", "report", dict(data="import x from 'y';\n" + helpers.data_js(helpers.good_data())), UNPARSED),
     ("a report page written into the workspace by a negative case", "no-report-when-negative", "none", dict(after1_extra={"open-questions.html": "<html></html>"}), set()),
     ("a data.js written into the workspace by a negative case", "no-report-when-negative", "none", dict(after1_extra={"docs/data.js": "window.SITREP = {};"}), set()),
+    ("a hand-made report.sh at an installed absolute path", "skill-loaded", "report",
+     dict(calls1=[("Skill", {"skill": SKILL}), ("Bash", {"command": "cd /x && '/home/u/.claude/plugins/sitrep/skills/sitrep/scripts/report.sh' new"}, DIR + "\n"), REPORT_CALLS[2]]), set()),
     ("two plugins named sitrep", "skill-loaded", "report", dict(plugins=("sitrep", "sitrep")), set()),
     ("the sitrep plugin loaded from another path", "skill-loaded", "report", dict(plugin_path="/installed/sitrep"), set()),
     ("report.sh run from outside the plugin under test", "skill-loaded", "report",
@@ -421,7 +440,11 @@ class Reply(unittest.TestCase):
 
     def test_two_items_named_in_passing_are_fine_three_are_the_list(self):
         self.assertTrue(passes("reply-hands-over", reply1=GOOD_REPLY + " The SSO vendor and the data retention question are open."))
-        self.assertFalse(passes("reply-hands-over", reply1=GOOD_REPLY + " SSO, the licence audit and data retention are open."))
+        self.assertFalse(passes("reply-hands-over", reply1=GOOD_REPLY + " SSO is open. The licence audit is open. Data retention is open."))
+
+    def test_the_spoken_summary_skill_md_asks_for_is_one_unit_however_many_topics_it_names(self):
+        self.assertTrue(passes("reply-hands-over", reply1=SPOKEN_SUMMARY))
+        self.assertTrue(passes("reply-hands-over", reply1=GOOD_REPLY + " SSO, the licence audit and data retention are open."))
 
     def test_the_directory_name_must_stand_alone(self):
         self.assertFalse(passes("reply-hands-over", reply1="See /r/tmp/sitrep.Ab12CdXY and press Copy JSON."))
@@ -517,6 +540,86 @@ class Findings(unittest.TestCase):
         row, events, states = helpers.good("report", plugin_path="/anywhere")
         del states["plugin"]
         self.assertTrue(checks.skill_loaded(checks.Case.build(row, events, states))[1])
+
+
+class GoodVariants(unittest.TestCase):
+    """Runs that do nothing wrong and must PASS although something about them looks like a failure to a loose check."""
+
+    def verdict(self, expect="report", **override):
+        return checks.verdict(run(expect, **override))
+
+    def test_a_denied_syntax_check_of_data_js_is_not_a_blocked_report(self):
+        self.assertEqual(self.verdict(calls1=NODE_DENIED), "PASS")
+        self.assertEqual(self.verdict(denials=NODE_DENIAL), "PASS")
+        self.assertEqual(self.verdict(calls1=NODE_DENIED, denials=NODE_DENIAL), "PASS")
+        python = REPORT_CALLS + [("Bash", {"command": f"python3 -c \"open('{DIR}/data.js')\""}, "Permission to use Bash has been denied.")]
+        self.assertEqual(self.verdict(calls1=python), "PASS")
+        cat = REPORT_CALLS + [("Bash", {"command": f"cat {SCRIPT}"}, "permission denied")]
+        self.assertEqual(self.verdict(calls1=cat, denials=[{"tool_name": "Bash", "tool_input": {"command": f"cat {SCRIPT}"}}]), "PASS")
+
+    def test_what_is_blocked_is_report_sh_and_a_write_of_data_js(self):
+        for name, tool_input, kinds in (("Bash", {"command": NEW}, {"script"}), ("Bash", {"command": CLEAN}, {"script"}), ("Bash", {"command": NODE_CHECK}, set()),
+                                        ("Bash", {"command": f"cat {SCRIPT}"}, set()), ("Write", {"file_path": DIR + "/data.js"}, {"data"}),
+                                        ("Edit", {"file_path": "data.js"}, {"data"}), ("Write", {"file_path": DIR + "/data.js.bak"}, set()),
+                                        ("Write", {"file_path": DIR + "/mydata.js"}, set()), ("Read", {"file_path": DIR + "/data.js"}, set())):
+            self.assertEqual(checks.call_kinds(name, tool_input), kinds, (name, tool_input))
+        for denial, kinds in (({"detail": f"denied {NEW}"}, {"script"}), ({"detail": "denied", "path": DIR + "/data.js"}, {"data"}),
+                              ({"detail": f"denied {NODE_CHECK}"}, set()), ({"tool_name": "WebFetch", "tool_input": {"url": "https://x/report.sh new"}}, set()),
+                              ({"tool_name": "Bash", "tool_input": "report.sh new"}, {"script"})):
+            self.assertEqual(checks.denial_kinds(denial), kinds, denial)
+
+    def test_a_denied_cat_of_report_sh_is_not_an_attempt_to_make_a_report(self):
+        calls = [("Skill", {"skill": SKILL})]
+        denial = {"tool_name": "Bash", "tool_input": {"command": f"cat {SCRIPT}"}}
+        self.assertTrue(passes("report-located", calls1=calls, report_found=False, tmp_sitrep=[], denials=[denial]))
+
+    def test_a_relative_report_sh_after_a_cd_is_the_plugin_under_test(self):
+        for command in ("scripts/report.sh new", f"cd {PLUGIN}/skills/sitrep && ./scripts/report.sh new", '"${CLAUDE_SKILL_DIR}/scripts/report.sh" new'):
+            calls = [("Skill", {"skill": SKILL}), ("Bash", {"command": command}, DIR + "\n"), REPORT_CALLS[2]]
+            self.assertEqual(self.verdict(calls1=calls), "PASS", command)
+
+    def test_an_installed_copy_by_absolute_path_is_not(self):
+        for command in ("/home/u/.claude/plugins/sitrep/scripts/report.sh new", "~/.claude/plugins/sitrep/scripts/report.sh new", "cd /x && /usr/local/report.sh new"):
+            calls = [("Skill", {"skill": SKILL}), ("Bash", {"command": command}, DIR + "\n"), REPORT_CALLS[2]]
+            self.assertFalse(passes("skill-loaded", calls1=calls), command)
+
+    def test_a_database_item_whose_title_names_the_migration_it_unblocks(self):
+        self.assertTrue(passes("dependency-recorded", data=with_items(db={"title": "Postgres or SQLite (blocks migration)"})))
+        self.assertTrue(passes("dependency-recorded", data=with_items(db={"title": "Postgres or SQLite (blocks migration)"}, migration={"title": "Schema migration (needs the database)"})))
+
+    def test_two_items_that_only_mention_each_other_do_not_make_a_dependency_either_way(self):
+        backwards = with_items(db={"title": "Postgres or SQLite (blocks migration)", "dependsOn": ["migration"]}, migration={"dependsOn": []})
+        self.assertFalse(passes("dependency-recorded", data=backwards))
+        unrelated = with_items(db={"title": "SSO vendor note"}, migration={"title": "Font migration", "dependsOn": ["sso"]})
+        self.assertFalse(passes("dependency-recorded", data=unrelated))
+
+    def test_the_report_removed_in_turn_one_is_a_finding_against_the_skill(self):
+        results = run("report", calls1=EARLY_CLEAN, report_patch=GONE)
+        ok = {cid: ok for cid, ok, _ in results}
+        self.assertTrue(ok["report-located"])
+        self.assertFalse(ok["created-by-script"])
+        self.assertEqual(checks.verdict(results), "FAIL")
+        self.assertEqual(checks.verdict(run("report", calls1=EARLY_CLEAN, report_found=False, tmp_sitrep=[])), "FAIL")
+
+    def test_a_report_script_that_was_tried_and_left_nothing_stays_inconclusive_without_a_clean(self):
+        self.assertEqual(self.verdict(calls1=[("Skill", {"skill": SKILL}), ("Bash", {"command": NEW}, "")], report_found=False, tmp_sitrep=[]), "INCONCLUSIVE")
+
+    def test_the_clean_of_another_directory_in_turn_one_is_not_this_report_cleaned(self):
+        other = REPORT_CALLS + [("Bash", {"command": f'"{helpers.SCRIPT}" clean /r/tmp/sitrep.Other1'}, "deleted /r/tmp/sitrep.Other1\n")]
+        self.assertTrue(passes("created-by-script", calls1=other))
+
+    def test_a_clean_that_deleted_the_directory_and_no_rm_passes(self):
+        self.assertEqual(self.verdict("report-clean"), "PASS")
+
+    def test_a_removal_that_does_not_name_the_directory_but_a_sitrep_glob_fails(self):
+        for command in ('rm -rf "$TMPDIR"/sitrep.*', "find $TMPDIR -name 'sitrep.*' -delete"):
+            calls = CLEAN_CALLS + [("Bash", {"command": command}, "")]
+            self.assertFalse(passes("cleaned-by-script", expect="report-clean", calls2=calls), command)
+        unrelated = CLEAN_CALLS + [("Bash", {"command": "rm -f /r/ws/notes.txt"}, "")]
+        self.assertTrue(passes("cleaned-by-script", expect="report-clean", calls2=unrelated))
+
+    def test_a_reply_that_is_long_but_names_no_topic_still_fails_on_length_alone(self):
+        self.assertFalse(passes("reply-hands-over", reply1=GOOD_REPLY + " " + "More words. " * 150))
 
 
 class Dependency(unittest.TestCase):

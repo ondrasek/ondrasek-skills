@@ -10,7 +10,7 @@ empty hooks directory. The agent command gets the prompt in place of `{prompt}` 
 `--plugin-dir <plugin>` and, for a second turn, `--resume <session id>`; `--add-dir` takes a list, so it is never the last argument.
 The environment gets EVAL_PROMPT_ID, EVAL_TRIAL, EVAL_TURN, TMPDIR and GIT_CONFIG_GLOBAL/SYSTEM pointing at nothing. Its stdout is the
 trace, saved as artifacts/<id>.jsonl; the snapshots (workspace before and after each turn, the report directory after each turn) are
-saved as artifacts/<id>.state.json. The root is deleted after the last snapshot unless --keep is given.
+saved as artifacts/<id>.state.json together with the runner's note (non-zero exit, timeout, missing session id) as `run_note`. The root is deleted after the last snapshot unless --keep is given.
 A trial is PASS, FAIL or INCONCLUSIVE (a precondition failed: the behaviour was never exercised; see checks.verdict).
 A run that did not finish (non-zero exit, timeout, no success result event) is INCONCLUSIVE too (check run-completed).
 The exit code is 0 when every trial passes, 1 when a trial fails or is inconclusive, 2 when a run cannot start.
@@ -125,10 +125,10 @@ def run_all(rows, args):
             if args.fixtures:
                 found = recorded(args.fixtures, row.id, trial)
                 events, states = found if found else ([], {})
-                if not found:
-                    note = f"no recorded trace for {row.id} in {args.fixtures}"
+                note = states.get("run_note", "") if found else f"no recorded trace for {row.id} in {args.fixtures}"
             else:
                 text, states, note = run_agent(row, trial, args)
+                states["run_note"] = note       # saved with the snapshots, so that a recorded run is graded with it (a non-zero exit after a success result)
                 if out_dir:
                     trace_path(out_dir, row.id, trial, args.trials).write_text(text, encoding="utf-8", newline="\n")
                     trace_path(out_dir, row.id, trial, args.trials, "state.json").write_text(json.dumps(states, indent=1, sort_keys=True), encoding="utf-8", newline="\n")

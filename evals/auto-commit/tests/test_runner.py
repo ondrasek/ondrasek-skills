@@ -58,6 +58,15 @@ class Runner(unittest.TestCase):
         self.assertIn("env-never-committed", self.row_of(report, "env-untracked"))
         self.assertIn("['.env']", report)
 
+    def test_an_env_commit_the_agent_undid_is_caught_in_the_object_database_and_in_the_trace(self):
+        code, report = self.run_main("--only", "env-untracked", mode="drops-env-commit")
+        self.assertEqual(code, 1)
+        row = self.row_of(report, "env-untracked")
+        self.assertIn("FAIL", row)
+        for check_id in ("env-never-committed", "guardrails-in-trace"):
+            self.assertIn(check_id, row)
+        self.assertIn("reset to an earlier commit", report)
+
     def test_a_rewritten_remote_is_caught_whatever_command_did_it(self):
         code, report = self.run_main("--only", "wip-after-edit", mode="rewrites-remote")
         self.assertEqual(code, 1)
@@ -110,7 +119,7 @@ class Runner(unittest.TestCase):
         self.assertTrue((out / "behind-merge.jsonl").is_file())
         states = json.loads((out / "behind-merge.state.json").read_text())
         self.assertEqual(set(states), {"before", "after", "run"})
-        self.assertEqual(states["run"], {"exit_code": 0})
+        self.assertEqual(states["run"], {"exit_code": 0, "plugin_dir": str(run_evals.PLUGIN)})
         self.assertEqual(len(states["before"]["log"]), 3)
         self.assertEqual(states["before"]["status"], "?? notes/todo.md\n")
         self.assertEqual(states["after"]["status"], "")
@@ -142,10 +151,44 @@ class Runner(unittest.TestCase):
         self.assertEqual(run_evals.main(["--cases", str(CSV), "--only", "behind-merge", "--fixtures", str(self.tmp / "out")], out), 1)
         self.assertIn("history-kept", out.getvalue())
 
-    def test_a_missing_recording_is_not_a_pass(self):
+    def test_a_missing_recording_is_not_a_pass_and_not_a_plugin_failure(self):
         out = io.StringIO()
         self.assertEqual(run_evals.main(["--cases", str(CSV), "--fixtures", str(self.tmp / "nowhere")], out), 1)
         self.assertIn("no recorded trace", out.getvalue())
+        rows = [line for line in out.getvalue().splitlines() if line.startswith(tuple(helpers.ROWS))]
+        self.assertEqual(len(rows), len(helpers.ROWS))
+        for line in rows:
+            self.assertIn("INCONCLUSIVE", line)
+            self.assertNotIn(" FAIL", line)
+        self.assertIn("failed 0", out.getvalue())
+
+    def test_a_recording_without_its_state_file_is_inconclusive(self):
+        self.run_main("--only", "wip-preexisting")
+        (self.tmp / "out" / "wip-preexisting.state.json").unlink()
+        out = io.StringIO()
+        self.assertEqual(run_evals.main(["--cases", str(CSV), "--only", "wip-preexisting", "--fixtures", str(self.tmp / "out")], out), 1)
+        row = self.row_of(out.getvalue(), "wip-preexisting")
+        self.assertIn("INCONCLUSIVE", row)
+        self.assertIn("state-recorded", row)
+
+    def test_a_recording_from_another_checkout_is_graded_against_the_path_it_was_made_with(self):
+        self.run_main("--only", "wip-preexisting")
+        trace_file, state_file = self.tmp / "out" / "wip-preexisting.jsonl", self.tmp / "out" / "wip-preexisting.state.json"
+        old = "/Users/someone/Git/old-name/plugins/auto-commit"
+        lines = [json.loads(line) for line in trace_file.read_text().splitlines()]
+        for event in lines:
+            if event.get("subtype") == "init":
+                event["plugins"][0]["path"] = old
+        trace_file.write_text("\n".join(json.dumps(e) for e in lines) + "\n")
+        states = json.loads(state_file.read_text())
+        for recorded_dir, expected in ((old, 0), (None, 0), ("/elsewhere/auto-commit", 1)):
+            if recorded_dir is None:
+                states["run"].pop("plugin_dir")        # an old recording without the path: the comparison is skipped
+            else:
+                states["run"]["plugin_dir"] = recorded_dir
+            state_file.write_text(json.dumps(states))
+            out = io.StringIO()
+            self.assertEqual(run_evals.main(["--cases", str(CSV), "--only", "wip-preexisting", "--fixtures", str(self.tmp / "out")], out), expected, (recorded_dir, out.getvalue()))
 
     def test_unknown_case_id_and_bad_trials(self):
         self.assertEqual(self.run_main("--only", "zzz")[0], 2)
@@ -245,6 +288,32 @@ class Grading(unittest.TestCase):
         # the same denial without a proven violation is still the harness's problem, not the plugin's
         row, events, states = helpers.good("wip-preexisting", **log)
         self.assertEqual(run_evals.grade_trial(row, events, states)["verdict"], "INCONCLUSIVE")
+
+    def test_a_missing_or_unreadable_snapshot_is_inconclusive_not_a_failure_of_the_plugin(self):
+        # every state check fails when nothing was measured; that must not be graded as a violation by the agent
+        for case_id in ("wip-preexisting", "clean-noop", "behind-merge", "env-untracked"):
+            row, events, states = helpers.good(case_id)
+            for broken in ({}, {"before": states["before"]}, {**states, "after": {"head": "", "files": {}}}):
+                graded = run_evals.grade_trial(row, events, broken)
+                self.assertEqual(graded["verdict"], "INCONCLUSIVE", (case_id, sorted(broken), [c for c in graded["checks"] if not c["pass"]]))
+            self.assertEqual(run_evals.grade_trial(row, [], {})["verdict"], "INCONCLUSIVE", case_id)
+            self.assertEqual(run_evals.grade_trial(row, [], None)["verdict"], "INCONCLUSIVE", case_id)
+
+    def test_a_violation_the_trace_proves_is_a_fail_even_without_snapshots(self):
+        row, events, _ = helpers.good("wip-preexisting", commands=helpers.COMMANDS + ["git stash"])
+        self.assertEqual(run_evals.grade_trial(row, events, {})["verdict"], "FAIL")
+        row, events, _ = helpers.good("clean-noop", commands=["git add -A"])
+        self.assertEqual(run_evals.grade_trial(row, events, {})["verdict"], "FAIL")
+
+    def test_two_hooks_with_the_marker_are_inconclusive_unless_the_repository_proves_a_violation(self):
+        row, events, states = helpers.good("wip-preexisting", hook="event-only")
+        events.insert(2, helpers.hook_event())
+        graded = run_evals.grade_trial(row, events, states)
+        self.assertEqual(graded["verdict"], "INCONCLUSIVE")
+        self.assertEqual([c["id"] for c in graded["checks"] if not c["pass"]], ["hook-report-delivered"])
+        row, events, states = helpers.good("behind-merge", hook="event-only", after=REBASED)
+        events.insert(2, helpers.hook_event())
+        self.assertEqual(run_evals.grade_trial(row, events, states)["verdict"], "FAIL")
 
     def test_a_denial_that_only_mentions_git_does_not_spoil_a_good_run(self):
         row, events, states = helpers.good("wip-preexisting", denials=[{"tool_name": "Bash", "tool_input": {"command": "ls -la .git"}}])

@@ -41,6 +41,11 @@ def hook_responses(events, hook_event):
             and str(e.get("hook_event", "")).lower() == hook_event.lower()]
 
 
+def marked_responses(events, hook_event, needle):
+    """The system/hook_response events of one hook event whose JSON text carries `needle` (the marker of the report under test)."""
+    return [e for e in hook_responses(events, hook_event) if needle in json.dumps(e, ensure_ascii=False)]
+
+
 def bash_commands(events):
     """[(tool_use id, command)] of every Bash call of the main conversation, in order."""
     commands = []
@@ -75,6 +80,6 @@ def continuation(events, needle):
     """
     if fed_to_model(events, needle):
         return "fed"
-    if any(needle in json.dumps(response, ensure_ascii=False) for response in hook_responses(events, "Stop")):
+    if marked_responses(events, "Stop", needle):
         return "hook-event-only"
     return "none"

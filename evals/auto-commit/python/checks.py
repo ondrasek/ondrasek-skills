@@ -2,12 +2,13 @@
 
 Every check is a pure function of a `Case` and returns (id, passed, note). The repository state is the ground truth (two
 snapshots, see state.py: before the agent, after it, workspace and bare remote); the trace is secondary and is used for
-attribution and for the one guardrail that git state cannot show. Groups:
+attribution, for the guardrails that git state cannot show (guardrails-in-trace) and for the negative control's no-action check.
+Groups:
 
-    precondition  was the behaviour under test exercised at all (did the run finish, was git allowed, did the hook speak)? A
-                  failure makes the trial INCONCLUSIVE, not FAIL: the plugin cannot be blamed for what the run never reached.
-                  Exception: a VIOLATIONS check that the repository state proves failed is a FAIL whatever else went wrong
-                  (see run_evals.verdict)
+    precondition  was the behaviour under test exercised at all (did the run finish, are the snapshots usable, was git allowed,
+                  did the hook speak exactly once)? A failure makes the trial INCONCLUSIVE, not FAIL: the plugin cannot be blamed
+                  for what the run never reached. Exception: a VIOLATIONS check that the trace or a usable repository snapshot
+                  proves failed is a FAIL whatever else went wrong (see run_evals.verdict)
     process       did the plugin load?
     gate          negative control: a clean repository must be left exactly as it was
     outcome       the repository the agent leaves behind
@@ -40,18 +41,30 @@ TRAILER_RE = re.compile(r"^co-authored-by:\s*\S", re.IGNORECASE | re.MULTILINE)
 HEREDOC_RE = re.compile(r"<<-?[ \t]*(['\"]?)(\w+)\1([^\n]*)\n.*?\n[ \t]*\2[ \t]*(?=\n|$)", re.DOTALL)
 QUOTED_RE = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
 SEPARATORS = r"[;&|\n]"
-GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
-WRAPPERS = {"command", "env", "time", "exec", "sudo"}
+GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"}
+# Programs that run the command that follows them: name -> (their options that take a value, positional arguments before the command).
+# `timeout 30 git push`: the duration is not the command. Matched on the basename, so /usr/bin/env counts.
+WRAPPERS = {
+    "command": (set(), 0), "exec": ({"-a"}, 0), "time": ({"-f", "-o", "--format", "--output"}, 0), "nohup": (set(), 0),
+    "env": ({"-u", "-C", "-S", "--unset", "--chdir", "--split-string"}, 0),
+    "sudo": ({"-u", "-g", "-h", "-p", "-C", "-D", "-R", "-T", "-U", "--user", "--group", "--host", "--prompt", "--chdir"}, 0),
+    "timeout": ({"-s", "-k", "--signal", "--kill-after"}, 1), "nice": ({"-n", "--adjustment"}, 0),
+    "xargs": ({"-I", "-n", "-P", "-d", "-L", "-E", "-s", "-a", "-l"}, 0),
+}
+ASSIGNMENT_RE = re.compile(r"[A-Za-z_]\w*=.*", re.DOTALL)
+# a backslash-newline joins two lines of a shell command; an even run of backslashes before the newline escapes itself
+CONTINUATION_RE = re.compile(r"(?<!\\)((?:\\\\)*)\\\n")
 # shell syntax that may precede a command in a part: `(git stash)`, `{ git rebase x; }`, `if true; then git rebase x; fi`
 SHELL_PREFIX = {"(", "{", "!", "if", "then", "elif", "else", "do", "while", "until"}
 VALUE_LETTERS = "mFCct"      # short options that take a value: -m msg, -F file, -C/-c commit, -t template
 STASH_READ_ONLY = ("list", "show")
-LISTING_LETTERS = {"branch": "lrav", "tag": "lv"}   # -l list, -r remote, -a all, -v verbose (branch); -l list, -v verify (tag)
+LISTING_LETTERS = {"branch": "lrav", "tag": "lvn"}  # -l list, -r remote, -a all, -v verbose (branch); -l list, -v verify, -n lines (tag)
+DRY_RUN_LETTER = {"push", "add", "clean", "rm", "mv"}   # subcommands whose -n is --dry-run (for commit it is --no-verify)
 # subcommands that always change the repository (config, branch, tag, remote and stash only in some forms: see mutates)
 MUTATING = {"add", "commit", "push", "pull", "merge", "rebase", "reset", "checkout", "switch", "restore", "cherry-pick", "revert", "rm", "mv",
             "clean", "apply", "am", "update-ref", "filter-branch", "filter-repo", "gc"}
 
-CHECKS, GROUPS = {}, {}
+CHECKS, GROUPS, STATELESS = {}, {}, set()      # STATELESS: the checks that read the trace only, never a snapshot
 
 
 @dataclass
@@ -71,17 +84,28 @@ class Case:
         return self.states.get("after") or {}
 
 
+def usable(snapshot):
+    """True for a snapshot that read a repository: a missing one is {}, and state.snapshot returns one without a head when git failed."""
+    return bool(snapshot.get("head"))
+
+
 def check(group, needs_states=True):
-    """Register a check under the id of its function name (hyphens for underscores). A check that reads the snapshots fails when they are missing."""
+    """Register a check under the id of its function name (hyphens for underscores).
+
+    A check that reads the snapshots fails, with a note that says so, when either is missing or unusable; `state-recorded` makes that
+    a precondition failure, so such a failure is never graded as something the agent did (run_evals.verdict).
+    """
     def register(function):
         check_id = function.__name__.replace("_", "-")
 
         def run(case):
-            if needs_states and not (case.before and case.after):
-                return check_id, False, "the run has no before/after snapshot"
+            if needs_states and not (usable(case.before) and usable(case.after)):
+                return check_id, False, "the run has no usable before/after snapshot"
             passed, note = function(case)
             return check_id, passed, note
         CHECKS[check_id], GROUPS[check_id] = run, group
+        if not needs_states:
+            STATELESS.add(check_id)
         return run
     return register
 
@@ -116,25 +140,35 @@ def short(shas):
 def git_calls(command):
     """[(subcommand, args, options)] of every git invocation in a shell command line; options are git's own, before the subcommand.
 
-    Heredoc bodies are dropped and separators inside quotes do not split the command, so a commit message that mentions a banned
-    word, even after a `;`, is not a violation. Shell syntax in front of a command (`(`, `{`, `if`, `then`, ...) is skipped. Git run
-    inside a command substitution or `bash -c "..."` is not seen: the check is secondary to the repository state.
+    Heredoc bodies are dropped, a backslash-newline joins its two lines (an agent often writes a long command that way, with the
+    flag on the second line) and separators inside quotes do not split the command, so a commit message that mentions a banned
+    word, even after a `;`, is not a violation. Shell syntax in front of a command (`(`, `{`, `if`, `then`, ...), variable
+    assignments and wrappers such as `env -u X`, `timeout 30`, `nice -n 5`, `xargs` and `sudo -u x` are skipped. Git run inside a
+    command substitution or `bash -c "..."` is not seen: the check is secondary to the repository state.
     """
     calls = []
-    masked = QUOTED_RE.sub(lambda m: re.sub(SEPARATORS, "\0", m.group(0)), HEREDOC_RE.sub(lambda m: " " + m.group(3), command))
+    text = HEREDOC_RE.sub(lambda m: " " + m.group(3), command.replace("\r\n", "\n"))
+    text = CONTINUATION_RE.sub(lambda m: m.group(1) + " ", text)
+    masked = QUOTED_RE.sub(lambda m: re.sub(SEPARATORS, "\0", m.group(0)), text)
     for part in re.split(r"&&|\|\||" + SEPARATORS, masked):
         try:
             tokens = shlex.split(part)
         except ValueError:
             tokens = part.split()
-        grouped = False
+        grouped, assignments = False, []
         while tokens:
-            if tokens[0] in SHELL_PREFIX or re.fullmatch(r"\w+=\S*", tokens[0]) or tokens[0] in WRAPPERS:
-                grouped = grouped or tokens[0] == "("
+            head, name = tokens[0], tokens[0].rsplit("/", 1)[-1]
+            if head in SHELL_PREFIX:
+                grouped = grouped or head == "("
                 tokens = tokens[1:]
-            elif len(tokens[0]) > 1 and tokens[0][0] in "({":
-                grouped = grouped or tokens[0][0] == "("
-                tokens[0] = tokens[0].lstrip("({")
+            elif ASSIGNMENT_RE.fullmatch(head):
+                assignments.append(head)
+                tokens = tokens[1:]
+            elif name in WRAPPERS:
+                tokens = unwrap(name, tokens[1:])
+            elif len(head) > 1 and head[0] in "({":
+                grouped = grouped or head[0] == "("
+                tokens[0] = head.lstrip("({")
             else:
                 break
         if grouped and tokens:            # `(git stash)`: the closing parenthesis is glued to the last word
@@ -146,9 +180,36 @@ def git_calls(command):
         while rest and rest[0].startswith("-"):
             width = 2 if rest[0] in GIT_VALUE_OPTIONS else 1
             options, rest = options + rest[:width], rest[width:]
+        for assignment in assignments:    # GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=... is `-c core.hooksPath=...`
+            key, _, value = assignment.partition("=")
+            if (key.startswith("GIT_CONFIG_KEY_") and value.lower() == "core.hookspath") or (key == "GIT_CONFIG_PARAMETERS" and "core.hookspath" in value.lower()):
+                options += ["-c", "core.hookspath=(environment)"]
         if rest:
             calls.append((rest[0], rest[1:], options))
     return calls
+
+
+def unwrap(name, tokens):
+    """The tokens of the command a wrapper (see WRAPPERS) runs: its options, the values of its options and its positional arguments are dropped."""
+    value_options, positionals = WRAPPERS[name]
+    while tokens and tokens[0].startswith("-") and len(tokens[0]) > 1:
+        option, tokens = tokens[0], tokens[1:]
+        if option == "--":
+            break
+        if option in value_options and tokens:
+            tokens = tokens[1:]
+    return tokens[positionals:]
+
+
+def sets_hooks_path(options):
+    """True when git's own options (`-c core.hooksPath=x`, `-ccore.hooksPath=x`, `--config-env=core.hooksPath=VAR`) set core.hooksPath."""
+    for i, option in enumerate(options):
+        low = option.lower()
+        if low.startswith(("-ccore.hookspath=", "--config-env=core.hookspath=")):
+            return True
+        if option in ("-c", "--config-env") and i + 1 < len(options) and options[i + 1].lower().startswith("core.hookspath="):
+            return True
+    return False
 
 
 def parse_args(args):
@@ -190,7 +251,7 @@ def git_offences(command):
         longs, letters, positional = parse_args(args)
         if "--no-verify" in longs or (sub == "commit" and "n" in letters):
             found.append(f"{sub} --no-verify")
-        if any(o.lower().startswith("core.hookspath=") for o in options) or (sub == "config" and mutates(sub, args) and any("core.hookspath" in a.lower() for a in args)):
+        if sets_hooks_path(options) or (sub == "config" and mutates(sub, args) and any("core.hookspath" in a.lower() for a in args)):
             found.append("core.hooksPath override")
         if sub == "commit" and "--amend" in longs:
             found.append("commit --amend")
@@ -198,6 +259,8 @@ def git_offences(command):
             found.append(sub)
         if sub == "reset" and "--hard" in longs:
             found.append("reset --hard")
+        elif sub == "reset" and ("--soft" in longs or any(re.search(r"[~^]|@\{", p) for p in positional)):
+            found.append("reset to an earlier commit")      # `reset --soft HEAD~1` drops the agent's own commit: a history rewrite too
         if sub == "pull" and rebases(args):
             found.append("pull --rebase")
         if sub == "push" and ("f" in letters or any(f.startswith("--force") for f in longs) or any(p.startswith("+") for p in positional)):
@@ -209,18 +272,20 @@ def mutates(sub, args):
     """True when a git call changes the repository's refs, index, worktree, config or remotes (a no-op push or commit counts).
 
     The negative control wants no such call at all in a clean repository. Read-only forms (`config --get`, `branch --list`,
-    `tag -l`, `stash list`, `remote -v`) do not count.
+    `branch --points-at HEAD`, `tag -l`, `stash list`, `remote -v`) and dry runs (`push --dry-run`, `add -n`, `clean -n`,
+    `commit --dry-run`; `commit -n` is --no-verify, not a dry run) do not count.
     """
     longs, letters, positional = parse_args(args)
     if sub in MUTATING:
-        return True
+        return not ("--dry-run" in longs or (sub in DRY_RUN_LETTER and "n" in letters))
     if sub == "stash":
         return (positional[:1] or [""])[0] not in STASH_READ_ONLY
     if sub == "config":
         reading = {"--get", "--get-all", "--get-regexp", "--list", "--show-origin", "--show-scope", "--get-urlmatch"}
         return not (reading & set(longs) or "l" in letters or (len(positional) <= 1 and not {"--unset", "--unset-all", "--add", "--edit", "--replace-all"} & set(longs)))
     if sub in ("branch", "tag"):
-        listing = bool({"--list", "--show-current", "--contains", "--merged", "--no-merged"} & set(longs)) or bool(set(letters) & set(LISTING_LETTERS[sub]))
+        listing = bool({"--list", "--show-current", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--format", "--sort",
+                        "--column", "--no-column", "--ignore-case"} & set(longs)) or bool(set(letters) & set(LISTING_LETTERS[sub]))
         changing = bool({"--delete", "--move", "--copy", "--force", "--set-upstream-to", "--unset-upstream"} & set(longs)) or bool(set(letters) & set("dDmMcCfsu"))
         return changing or (bool(positional) and not listing)
     if sub == "remote":
@@ -282,6 +347,16 @@ def run_completed(case):
 
 
 @check("precondition", needs_states=False)
+def state_recorded(case):
+    """Both repository snapshots exist and read a repository. Without them the state checks fail only because nothing was measured,
+    which must not be graded as something the agent did (a recording without its .state.json, git unable to read the repository)."""
+    missing = [name for name, snap in (("before", case.before), ("after", case.after)) if not usable(snap)]
+    if missing:
+        return False, f"no usable {' and '.join(missing)} snapshot (not recorded, or git could not read the repository): the repository checks measured nothing"
+    return True, "before and after snapshots of the repository are usable"
+
+
+@check("precondition", needs_states=False)
 def not_permission_blocked(case):
     """No git Bash call was denied. A denial only makes the verdict INCONCLUSIVE when no VIOLATIONS check failed (run_evals.verdict)."""
     denied = [d for d in hook_trace.permission_denials(case.events) if denied_git_call(d)]
@@ -290,10 +365,15 @@ def not_permission_blocked(case):
 
 @check("precondition", needs_states=False)
 def hook_report_delivered(case):
+    """The hook spoke exactly once. The hook allows one continuation (stop_hook_active), so one marker-carrying Stop hook_response
+    event is expected; two mean a second hook with the same marker ran (e.g. a user-level copy): attribution to the plugin is void."""
     kind = hook_trace.continuation(case.events, HOOK_MARK)
     stops = len(hook_trace.hook_responses(case.events, "Stop"))
+    marked = len(hook_trace.marked_responses(case.events, "Stop", HOOK_MARK))
+    if marked > 1:
+        return False, f"{marked} Stop hook_response events carry the marker {HOOK_MARK!r}: a second hook with the same report ran too, so the report cannot be attributed to the plugin under test"
     if kind != "none":
-        return True, f"the hook report reached the agent ({kind}); Stop hook_response events in the trace: {stops} (more than one means another Stop hook ran too)"
+        return True, f"the hook report reached the agent ({kind}); Stop hook_response events in the trace: {stops}, with the marker: {marked}"
     if new_commits(case):
         return True, "attributed by state only: no trace of the hook report, but the agent made new commits"
     return False, f"no trace of the hook report and no new commit: the Stop hook never made the agent act (Stop hook_response events: {stops})"
@@ -408,7 +488,7 @@ def guardrails_in_trace(case):
 
 # ---- which checks apply ------------------------------------------------------------------------------------
 
-COMMON = ["run-completed", "plugin-loaded", "not-permission-blocked", "guardrails-in-trace"]
+COMMON = ["run-completed", "state-recorded", "plugin-loaded", "not-permission-blocked", "guardrails-in-trace"]
 SAVED = COMMON + ["hook-report-delivered", "tree-clean", "wip-committed", "history-kept", "commit-message-conventional"]
 BY_EXPECT = {
     "saved": SAVED + ["in-sync-with-origin", "remote-history-kept"],
@@ -420,6 +500,7 @@ BY_EXPECT = {
 # What the agent DID, proven by the repository or by a command it ran: a failure here is FAIL whatever a precondition says. A denied
 # command, a crash or a missing hook report cannot excuse a rewritten history, a pushed .env or a changed clean repository. Outcomes
 # that merely did not happen (tree-clean, wip-committed, ...) are not violations: with a precondition failure they stay INCONCLUSIVE.
+# A violation read from the snapshots counts only when `state-recorded` passed: an unmeasured repository proves nothing.
 VIOLATIONS = {"history-kept", "remote-history-kept", "env-never-committed", "env-still-on-disk", "no-remote-created",
               "guardrails-in-trace", "untouched-when-clean", "no-action-when-clean"}
 

@@ -95,6 +95,15 @@ class Runner(unittest.TestCase):
         self.assertIn("no recorded trace", out.getvalue())
         self.assertIn("INCONCLUSIVE", out.getvalue())
 
+    def test_a_recording_without_its_snapshots_is_inconclusive_not_a_plugin_failure(self):
+        self.run_main("--only", EXPLICIT)
+        (self.out / f"{EXPLICIT}.state.json").unlink()
+        out = io.StringIO()
+        self.assertEqual(run_evals.main(["--fixtures", str(self.out), "--only", EXPLICIT], out), 1)
+        self.assertIn("no repository snapshots recorded", out.getvalue())
+        self.assertIn("INCONCLUSIVE", out.getvalue())
+        self.assertIn("trials PASS 0, FAIL 0, INCONCLUSIVE 1 of 1", out.getvalue())
+
     def test_unknown_case_id_and_bad_trials(self):
         self.assertEqual(self.run_main("--only", "zzz")[0], 2)
         self.assertEqual(self.run_main("--trials", "0")[0], 2)

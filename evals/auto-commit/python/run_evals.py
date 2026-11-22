@@ -12,12 +12,12 @@ as artifacts/<id>.jsonl; the repository snapshots before and after the agent are
 The trial directory is removed afterwards; --keep leaves it for inspection.
 
 A trial is PASS, FAIL (a check of the process, gate or outcome group failed, or a VIOLATIONS check that the repository state proves)
-or INCONCLUSIVE (a precondition check failed: the run crashed, git was denied or the hook never spoke, so the behaviour under test
-was never exercised and the plugin cannot be blamed). The exit code is 0 when every trial passes, 1 when a trial fails or is
+or INCONCLUSIVE (a precondition check failed: the run crashed, a snapshot is missing, git was denied or the hook never spoke, or
+spoke twice, so the behaviour under test was never exercised and the plugin cannot be blamed). The exit code is 0 when every trial passes, 1 when a trial fails or is
 inconclusive, 2 when a run cannot start.
 
 The agent's environment has no GIT_* variable of the caller (see without_git_variables) except the two isolation ones. The agent's
-exit code is saved in the state file under "run" so that a recorded run is graded with it.
+exit code and the --plugin directory are saved in the state file under "run" so that a recorded run is graded with them.
 """
 import argparse
 import contextlib
@@ -97,7 +97,8 @@ def run_agent(row, trial, args):
         except FileNotFoundError as error:
             raise SystemExit(f"run_evals: cannot start the agent command ({error}). Is it installed? Set --agent-cmd.") from None
         states["after"] = state.snapshot(ws, origin)
-        states["run"] = {"exit_code": code}
+        # the plugin directory is recorded too: a recording made in another checkout is graded against ITS path, not this checkout's
+        states["run"] = {"exit_code": code, "plugin_dir": str(Path(args.plugin).resolve())}
     finally:
         if args.keep:
             print(f"run_evals: kept the trial directory {root}", file=sys.stderr)
@@ -110,10 +111,12 @@ def verdict(results):
     """FAIL when a violation (checks.VIOLATIONS) failed; else INCONCLUSIVE when a precondition check failed; else FAIL when any failed; else PASS.
 
     A violation is something the agent did, which the repository or its own commands prove: a denied command, a crash or a missing hook
-    report cannot excuse it.
+    report cannot excuse it. A violation read from the snapshots is proven only when `state-recorded` passed: with a missing or
+    unreadable snapshot every state check fails because nothing was measured, which is the harness's problem (INCONCLUSIVE).
     """
-    failed = [r["id"] for r in results if not r["pass"]]
-    if any(cid in checks.VIOLATIONS for cid in failed):
+    failed = {r["id"] for r in results if not r["pass"]}
+    unmeasured = "state-recorded" in failed
+    if any(cid in checks.VIOLATIONS and (cid in checks.STATELESS or not unmeasured) for cid in failed):
         return "FAIL"
     if any(checks.GROUPS[cid] == "precondition" for cid in failed):
         return "INCONCLUSIVE"
@@ -151,7 +154,8 @@ def run_all(rows, args):
                     trace_path(out_dir, row.id, trial, args.trials).write_text(text, encoding="utf-8", newline="\n")
                     trace_path(out_dir, row.id, trial, args.trials, "state.json").write_text(json.dumps(states, indent=1, sort_keys=True), encoding="utf-8", newline="\n")
                 events = trace.parse(text)[0]
-            result = grade_trial(row, events, states, args.plugin and Path(args.plugin).resolve())
+            # the plugin directory the run used; a recording without one skips the path comparison (the @inline source is still required)
+            result = grade_trial(row, events, states, (states.get("run") or {}).get("plugin_dir", ""))
             result.update(trial=trial, run_note=note)
             trials.append(result)
         prompts.append({"id": row.id, "fixture": row.fixture, "expect": row.expect, "trials": trials})

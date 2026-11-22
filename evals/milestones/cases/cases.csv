@@ -1,4 +1,5 @@
 id,expect,fixture,want,prompt
+reminder-finishes,reminded-update,stale-task,2=done,"Add a function `slugify(text)` to src/textutil.py that lowercases the text and replaces every run of non-alphanumeric characters with a single hyphen. Don't run anything."
 show-where-are-we,show,tracker,,"Where are we with the release work? What is left before we can ship?"
 show-progress-bar,show,tracker,,"Show the progress bar."
 update-finish-and-start,update,tracker,"2=done,3=doing","The storage layer is finished and I have started on the sync API. Update the tracker."
@@ -7,5 +8,4 @@ create-tracker,create,bare,"title=Importer,count=3,names=schema|importer|migrati
 negative-code,none,tracker,,"Add a docstring to the function in src/textutil.py."
 negative-explain,none,bare,,"In two sentences, what is a milestone in project management?"
 negative-github,none,bare,,"How do I list the milestones of a GitHub repository with the gh CLI? Just give me the command."
-reminder-finishes,reminded-update,stale-task,2=done,"Add a function `slugify(text)` to src/textutil.py that lowercases the text and replaces every run of non-alphanumeric characters with a single hyphen. Don't run anything."
 reminder-nothing-changed,reminded-quiet,stale-idle,,"In one sentence, what does src/textutil.py do?"

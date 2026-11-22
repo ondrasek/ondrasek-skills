@@ -88,8 +88,10 @@ def grade_trial(row, events, states):
     results = [{"id": cid, "pass": ok, "notes": note} for cid, ok, note in checks.run_checks(case)]
     result = trace.result_event(events) or {}
     cost, turns = result.get("total_cost_usd"), result.get("num_turns")
-    # no events at all: the agent never ran (not installed, not logged in, no recording): nothing was exercised
-    verdict = checks.verdict([r["id"] for r in results if not r["pass"]]) if events else "INCONCLUSIVE"
+    # no events at all: the agent never ran (not installed, not logged in, no recording): nothing was exercised;
+    # no snapshots (a recording without its <id>.state.json): the repositories, the ground truth, were never seen
+    complete = bool(events) and bool((states or {}).get("before")) and bool((states or {}).get("after"))
+    verdict = checks.verdict([r["id"] for r in results if not r["pass"]]) if complete else "INCONCLUSIVE"
     return {"verdict": verdict, "checks": results, "turns": turns if isinstance(turns, int) else None,
             "cost": cost if isinstance(cost, (int, float)) else None, "duration_ms": result.get("duration_ms")}
 
@@ -108,6 +110,8 @@ def run_all(rows, args):
                 events, states = found if found else ([], {})
                 if not found:
                     note = f"no recorded trace for {row.id} in {args.fixtures}"
+                elif not (states.get("before") and states.get("after")):
+                    note = f"no repository snapshots recorded for {row.id} in {args.fixtures} (<id>.state.json missing or incomplete)"
             else:
                 text, states, note = run_agent(row, trial, args)
                 if out_dir:

@@ -4,9 +4,9 @@ Every check is a pure function of a `Case` and returns (id, passed, note); the n
 snapshots, see state.py) is the ground truth; the trace is secondary, because it shows only the main conversation: a tracker write
 by a subagent is visible in the files but not in the trace. Groups:
 
-    precondition  was the behaviour under test exercised at all? (the agent run completed and left both snapshots; the script was not
-                  permission-denied; the Stop hook ran and its report reached the model). A failure makes the trial INCONCLUSIVE,
-                  not FAIL: the plugin is not to blame.
+    precondition  was the behaviour under test exercised at all? (the agent run completed and left both snapshots; no installed copy of
+                  the plugin leaked in beside the one under test; the script was not permission-denied; the Stop hook ran and its
+                  report reached the model). A failure makes the trial INCONCLUSIVE, not FAIL: the plugin is not to blame.
     process       did the plugin load, the skill trigger exactly when it should, the tracker change only through milestones.py?
     gate          what must never happen: a changed tracker on a read, a direct write, a commit, a stray file, a tracker nobody asked for.
     outcome       is the tracker valid and what the prompt asked for, and the rest untouched?
@@ -38,16 +38,22 @@ SCRIPT_RE = re.compile(r"milestones\.py[\"']?\s+(show|set|add|remove|title|init)
 # A Bash command that writes the tracker file itself (a read such as `cat .cache/milestones.json` is not one). A command is split into
 # segments on unquoted && || ; | and newlines (split_commands), and every pattern below is applied to ONE segment that names the tracker.
 # A segment that runs the script is checked for a redirect into the tracker only.
-REDIRECT_RE = re.compile(r">{1,2}\s*[\"']?[^\s|;&]*milestones\.json")
-MOVE_RE = re.compile(r"\b(tee|mv|rm|truncate)\b[^|;&\n]*milestones\.json"
-                     r"|\b(cp|install|ln)\b[^|;&\n]*milestones\.json[\"']?\s*$"      # the tracker as the destination, not the source
-                     r"|\bsed\s+-\w*i[^|;&\n]*milestones\.json")
-# a Python write in a segment that names the tracker: open(..., 'w'), write_text, json.dump( (not json.dumps), shutil and os file moves
-PY_WRITE_RE = re.compile(r"\bopen\([^\n]*?,\s*[\"'](?:[wax]|r\+)|\bmode\s*=\s*[\"'][wax]|\b(?:write_text|write_bytes)\("
+# the end of the tracker's file name: `milestones.json.bak` or `milestones.json~` is another file
+TRACKER_FILE = r"milestones\.json(?![\w~]|\.\w)"
+REDIRECT_RE = re.compile(rf">{{1,2}}\s*[\"']?[^\s|;&]*{TRACKER_FILE}")
+MOVE_RE = re.compile(rf"\b(tee|mv|rm|truncate)\b[^|;&\n]*{TRACKER_FILE}"
+                     rf"|\b(cp|install|ln)\b[^|;&\n]*{TRACKER_FILE}[\"']?\s*$"      # the tracker as the destination, not the source
+                     rf"|\bsed\s+-\w*i[^|;&\n]*{TRACKER_FILE}")
+# a Python write in a segment that names the tracker: open(..., 'w') (the mode must be a string inside the open( call itself, one level of
+# nested parentheses allowed, so that a later string argument of print() or json.load() is not a mode), mode='w', write_text, json.dump(
+# (not json.dumps), shutil and os file moves
+PY_MODE = r"[\"'](?:[wax][bt]?\+?|r[bt]?\+|r\+[bt]?)[\"']"
+PY_WRITE_RE = re.compile(rf"\bopen\((?:(?:[^()\n]|\([^()\n]*\))*,)?\s*{PY_MODE}|\bmode\s*=\s*{PY_MODE}|\b(?:write_text|write_bytes)\("
                          r"|\bjson\.dump\(|\bshutil\.(?:copy\w*|move)\(|\bos\.(?:replace|rename|remove|unlink)\(")
 
 GROUPS = {
-    "agent-completed": "precondition", "not-permission-blocked": "precondition", "reminder-fired": "precondition", "reminder-delivered": "precondition",
+    "agent-completed": "precondition", "plugin-under-test-isolated": "precondition", "not-permission-blocked": "precondition",
+    "reminder-fired": "precondition", "reminder-delivered": "precondition",
     "skill-loaded": "process", "skill-trigger": "process", "shown-by-script": "process", "written-by-script": "process",
     "show-reads-only": "gate", "no-direct-tracker-write": "gate", "tracker-not-committed": "gate", "nothing-else-changed": "gate",
     "no-tracker-when-negative": "gate",
@@ -185,7 +191,9 @@ def tool_path(tool_input):
 
 def agent_completed(case):
     """The run finished and left evidence. Without it every gate and negative check is vacuous: a trace holding only the init event,
-    a budget stop or a timeout leaves the files untouched, which is what a correct negative run also does."""
+    a budget stop or a timeout leaves the files untouched, which is what a correct negative run also does. The reply text is NOT a
+    condition: the Stop hook asks for a silent update, so an empty final reply is a correct run in the reminder cases, and requiring
+    text would hide a real failure there behind INCONCLUSIVE."""
     problems = []
     if case.run_note:
         problems.append(f"run note: {case.run_note}")
@@ -194,25 +202,49 @@ def agent_completed(case):
         problems.append("no result event (the run did not finish)")
     elif result.get("is_error") or (isinstance(result.get("subtype"), str) and result["subtype"] != "success"):
         problems.append(f"the result event reports subtype {result.get('subtype')!r}, is_error {result.get('is_error')!r}")
-    if not case.reply.strip():
-        problems.append("no reply text")
     problems += [f"no {name} snapshot (state.json missing or empty)" for name in ("before", "after") if "files" not in (case.states.get(name) or {})]
-    return "agent-completed", not problems, "the run finished with a result, a reply and both snapshots" if not problems else "; ".join(problems)
+    return "agent-completed", not problems, "the run finished with a result and both snapshots" if not problems else "; ".join(problems)
+
+
+# the text of a refused call in a tool_result (UNCONFIRMED wording): such a result is a denial even when is_error is not set on it
+DENIED_TEXT_RE = re.compile(r"permission[^.\n]{0,60}denied|denied[^.\n]{0,60}permission|was denied|haven't granted", re.I)
+
+
+def looks_denied(text):
+    return len(text) < 400 and bool(DENIED_TEXT_RE.search(text))
 
 
 def not_permission_blocked(case):
-    """A denied call to the script blocks the trial unless an identical call (same arguments, path and quotes aside) later succeeded."""
+    """A denied call to the script blocks the trial unless an identical call (same arguments, path and quotes aside) later succeeded.
+
+    A call counts as a successful retry only when its tool_result has no is_error and does not read like a denial, and, for a denial that
+    carries no tool_use_id (its call cannot be told from its retry), only when there are MORE such successful-looking calls with that key
+    than denials of it: a denial whose own tool_result lacks is_error must not clear itself.
+    """
     results = hooks.tool_results(case.events)
+    calls = [(ident, command) for ident, command in hooks.bash_commands(case.events) if "milestones.py" in command]
+    call_ids = {ident for ident, _ in calls}
     denials = [d for d in hooks.permission_denials(case.events)
                if isinstance(d, dict) and d.get("tool_name") == "Bash" and "milestones.py" in json.dumps(d, ensure_ascii=False)]
-    denied_ids = {str(d["tool_use_id"]) for d in denials if d.get("tool_use_id")}
-    succeeded = {script_key(command) for ident, command in hooks.bash_commands(case.events)
-                 if "milestones.py" in command and ident not in denied_ids and ident in results and not results[ident][1]}
-    blocked = []
-    for denial in denials:
+    denied_ids = {str(d["tool_use_id"]) for d in denials if str(d.get("tool_use_id") or "") in call_ids}
+    unidentified = [d for d in denials if str(d.get("tool_use_id") or "") not in call_ids]
+
+    def key_of(denial):
         tool_input = denial.get("tool_input")
         command = str(tool_input.get("command", "")) if isinstance(tool_input, dict) else json.dumps(denial, ensure_ascii=False)
-        if script_key(command) not in succeeded:
+        return command, script_key(command)
+
+    succeeded = {}
+    for ident, command in calls:
+        if ident not in denied_ids and ident in results and not results[ident][1] and not looks_denied(results[ident][0]):
+            succeeded[script_key(command)] = succeeded.get(script_key(command), 0) + 1
+    owed = {}
+    for denial in unidentified:
+        owed[key_of(denial)[1]] = owed.get(key_of(denial)[1], 0) + 1
+    blocked = []
+    for denial in denials:
+        command, key = key_of(denial)
+        if succeeded.get(key, 0) <= owed.get(key, 0):
             blocked.append(command[:60])
     return "not-permission-blocked", not blocked, (f"permission denials of a Bash call running milestones.py: {len(denials)}; never retried successfully: "
                                                   f"{blocked or 'none'} (a denial means the grant did not match)")
@@ -241,20 +273,36 @@ def reminder_delivered(case):
 
 # ---- process -----------------------------------------------------------------------------------------------
 
+def milestones_entries(case):
+    """([plugins[] entries named milestones], [those that are the --plugin-dir copy]): source '<name>@inline', or a path equal to --plugin."""
+    entries = [e for e in hooks.plugin_entries(case.events) if e["name"] == SKILL]
+    wanted = os.path.realpath(case.plugin) if case.plugin else ""
+    inline = [e for e in entries if e["source"].endswith("@inline") or (wanted and e["path"] and os.path.realpath(e["path"]) == wanted)]
+    return entries, inline
+
+
+def plugin_under_test_isolated(case):
+    """No other copy of the plugin was loaded beside the --plugin-dir one: an installed copy (source '<name>@<marketplace>') or a second
+    copy is an environment leak, not a defect of the plugin, so a failure here is INCONCLUSIVE. Zero entries pass: skill-loaded says
+    that the plugin did not load."""
+    entries, inline = milestones_entries(case)
+    leaked = [(e["source"], e["path"]) for e in entries if e not in inline] if inline else [(e["source"], e["path"]) for e in entries]
+    ok = len(entries) <= 1 and not leaked
+    return "plugin-under-test-isolated", ok, (f"plugin entries named {SKILL}: {[(e['source'], e['path']) for e in entries]} "
+                                              f"(at most one, the --plugin-dir copy, is wanted); other copies: {leaked or 'none'}")
+
+
 def skill_loaded(case):
-    """The plugin under test is loaded exactly once, and as the --plugin-dir copy: its entry in plugins[] has source '<name>@inline' or
-    a path equal to --plugin. An installed copy (source '<name>@<marketplace>') or a second copy fails."""
+    """The plugin under test is loaded as the --plugin-dir copy (source '<name>@inline' or a path equal to --plugin) and its skill is listed
+    in system/init. Whether another copy leaked in is plugin-under-test-isolated."""
     skills = trace.init_skills(case.events)
     if skills is None:
         return "skill-loaded", False, "the trace has no system/init event"
     errors = hooks.plugins_loaded(case.events)[1]
-    entries = [e for e in hooks.plugin_entries(case.events) if e["name"] == SKILL]
+    entries, inline = milestones_entries(case)
     listed = any(trace.skill_matches(s, SKILL) for s in skills)
-    wanted = os.path.realpath(case.plugin) if case.plugin else ""
-    inline = [e for e in entries if e["source"].endswith("@inline") or (wanted and e["path"] and os.path.realpath(e["path"]) == wanted)]
-    ok = listed and len(entries) == 1 and len(inline) == 1
-    return "skill-loaded", ok, (f"plugin entries named {SKILL}: {[(e['source'], e['path']) for e in entries]} (one copy, loaded with --plugin-dir, is wanted), "
-                                f"plugin errors {errors}; skill {SKILL} {'is' if listed else 'is NOT'} listed")
+    return "skill-loaded", listed and bool(inline), (f"plugin entries named {SKILL}: {[(e['source'], e['path']) for e in entries]} "
+                                                      f"(one loaded with --plugin-dir is wanted), plugin errors {errors}; skill {SKILL} {'is' if listed else 'is NOT'} listed")
 
 
 def skill_trigger(case):
@@ -338,10 +386,22 @@ def no_tracker_when_negative(case):
 
 # ---- outcome -----------------------------------------------------------------------------------------------
 
+# What may stand between a milestone's name and "finished": whitespace, a copula (with an adverb), one colon, dash, arrow, bar or opening
+# parenthesis. Sentence punctuation (. ; ,) may not: "In progress: Storage layer. Completed 1/4" is not a claim that it is finished.
+_JOIN = r"(?:\s+|\s*(?:'s|\s(?:is|are|was|has been|had been))\s*|\s*[:\-\u2013\u2014\u2192|(]\s*)"
+_ADVERB = r"(?:(?:now|already|all|officially|fully|just)\s+)*"
+_VERB = r"(?:finished|completed?|done|shipped)"
+# and the verb must END the claim: "done so far", "completed tables", "done 1/4" are partial, "done." "done," "done and" are not
+_END = r"(?=\s*(?:$|[.,;:!?)\]|\u2014\u2013-]|\u2705)|\s+(?:and|but|then)\b)"
+
+
 def claims_done(reply, name):
-    """True when the reply says `name` is finished: the name followed at once by (is) finished, complete(d), done, shipped or a check mark."""
-    return bool(re.search(rf"{re.escape(name)}\W+(?:(?:is|are|was|has been|'s)\W+)?(?:(?:now|already|all)\W+)?(?:finished|completed?|done|shipped)\b|{re.escape(name)}\s*✅",
-                          reply, re.I))
+    """True when the reply says `name` is finished: the name, then (is) finished, complete(d), done or shipped as the end of the clause,
+    or the name followed by a check mark. Markdown emphasis is ignored. A heuristic with known limits (README): a verb before the name
+    ("we finished the storage layer") and a hedge after it ("done, apart from ...") are not read."""
+    text = re.sub(r"[*_`]", "", reply)
+    nm = re.escape(re.sub(r"[*_`]", "", name))
+    return bool(re.search(rf"{nm}{_JOIN}{_ADVERB}{_VERB}{_END}|{nm}\s*\u2705", text, re.I))
 
 
 def reply_names_current(case):
@@ -391,7 +451,7 @@ def others_untouched(case):
     if before is None:
         return "others-untouched", False, why
     old, new = items_of(before), items_of(after)
-    named = {i for i, _ in case.row.want.states} | set(case.row.want.needs)
+    named = {i for i, _ in case.row.want.states} | set(case.row.want.needs) | set(case.row.want.needs_you)
     problems = ([f"#{i} removed or renumbered" for i in old if i not in new] + [f"#{i} added" for i in new if i not in old]
                 + [f"#{i} changed" for i in old if i in new and i not in named and new[i] != old[i]]
                 + [f"#{i} renamed" for i in old if i in new and i in named and new[i].get("name") != old[i].get("name")])
@@ -442,8 +502,8 @@ def quiet_when_nothing_changed(case):
 
 # ---- which checks apply ------------------------------------------------------------------------------------
 
-SKILL_RUN = [agent_completed, skill_loaded, skill_trigger, not_permission_blocked]
-REMINDED = [agent_completed, skill_loaded, reminder_fired, reminder_delivered]
+SKILL_RUN = [agent_completed, plugin_under_test_isolated, skill_loaded, skill_trigger, not_permission_blocked]
+REMINDED = [agent_completed, plugin_under_test_isolated, skill_loaded, reminder_fired, reminder_delivered]
 GATES = [no_direct_tracker_write, tracker_not_committed, nothing_else_changed]
 BY_EXPECT = {
     "show": SKILL_RUN + [shown_by_script, show_reads_only, reply_names_current] + GATES,
@@ -464,7 +524,8 @@ def run_checks(case):
     """
     if case.row.expect == "none":
         has_tracker = TRACKER in build_fixture(case.row.fixture)
-        chosen = [agent_completed, skill_loaded, skill_trigger, show_reads_only if has_tracker else no_tracker_when_negative] + GATES
+        chosen = [agent_completed, plugin_under_test_isolated, skill_loaded, skill_trigger,
+                  show_reads_only if has_tracker else no_tracker_when_negative] + GATES
     else:
         chosen = BY_EXPECT[case.row.expect]
     return [check(case) for check in chosen]

@@ -32,8 +32,19 @@ def local_config(hooks_dir):
             "core.hooksPath": str(hooks_dir)}
 
 
+# Variables that would point git at another repository: a harness started from a git hook has them set. Neither the harness's git nor the
+# agent may inherit them (the agent command unsets them with `env -u`, see run_evals.DEFAULT_AGENT_CMD).
+GIT_UNSET = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_PREFIX")
+# Options for the harness's own git calls AFTER the agent ran: the agent can write the workspace's .git/config, and a config key can name a
+# program (core.fsmonitor, core.hooksPath, log.showSignature with gpg.program). Overriding them with -c wins over the file. Not a complete
+# defence (an include.path or another exec key could exist), only the known keys; the agent's own Bash has the same rights anyway.
+SAFE_GIT = ("-c", "core.fsmonitor=false", "-c", f"core.hooksPath={os.devnull}", "-c", "log.showSignature=false", "-c", "core.pager=cat",
+            "-c", "diff.external=")
+
+
 def _git(root, *args):
-    done = subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, stdin=subprocess.DEVNULL, env={**os.environ, **GIT_ENV})
+    env = {k: v for k, v in os.environ.items() if k not in GIT_UNSET}
+    done = subprocess.run(["git", *SAFE_GIT, *args], cwd=root, capture_output=True, text=True, stdin=subprocess.DEVNULL, env={**env, **GIT_ENV})
     if done.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} failed: {done.stderr.strip()}")
     return done.stdout

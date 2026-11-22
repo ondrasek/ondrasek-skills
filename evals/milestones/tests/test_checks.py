@@ -3,6 +3,7 @@ import unittest
 
 import helpers
 import checks
+import run_evals
 from helpers import NOTHING, SAME, SET_2_DONE, SET_3_DOING, SHOW, SKILL_ID, moved, tracker
 
 SKILL_CALL = ("Skill", {"skill": SKILL_ID})
@@ -22,11 +23,14 @@ def with_top_level(data, **extra):
 
 
 T = tracker("tracker")
+INLINE = {"name": "milestones", "source": "milestones@inline", "path": "/w/plugins/milestones"}
+INSTALLED = {"name": "milestones", "source": "milestones@ondrasek-skills", "path": "/home/u/cache/milestones"}
 NEW_TRACKER = {"title": "Other", "updated": helpers.FUTURE, "items": [{"id": n, "name": f"schema importer migration {n}", "state": "todo"} for n in (1, 2, 3)]}
 
 # check id -> (expect, override of helpers.good that must make exactly that check fail)
 MUTATIONS = {
     "skill-loaded": ("update", dict(skills=())),
+    "plugin-under-test-isolated": ("show", dict(entries=[INLINE, INSTALLED])),
     "skill-trigger": ("show", dict(calls=[("Bash", {"command": SHOW})])),
     "not-permission-blocked": ("update", dict(denials=[{"tool_name": "Bash", "tool_input": {"command": SET_2_DONE}}], outputs={SET_2_DONE: ("denied", True)})),
     "shown-by-script": ("show", dict(outputs={SHOW: ("python3: can't open file 'milestones.py'", True)})),
@@ -66,12 +70,12 @@ class GoodRuns(unittest.TestCase):
 
     def test_a_negative_on_a_tracker_fixture_may_edit_code(self):
         results = run("none", fixture="tracker", src_edit=True)
-        self.assertEqual(sorted(results), sorted(["agent-completed", "show-reads-only", "skill-loaded", "skill-trigger", "no-direct-tracker-write",
+        self.assertEqual(sorted(results), sorted(["agent-completed", "plugin-under-test-isolated", "show-reads-only", "skill-loaded", "skill-trigger", "no-direct-tracker-write",
                                                   "tracker-not-committed", "nothing-else-changed"]))
         self.assertTrue(all(ok for ok, _ in results.values()))
 
     def test_a_negative_on_a_bare_fixture_runs_the_bare_branch(self):
-        self.assertEqual(sorted(run("none")), sorted(["agent-completed", "no-tracker-when-negative", "skill-loaded", "skill-trigger",
+        self.assertEqual(sorted(run("none")), sorted(["agent-completed", "plugin-under-test-isolated", "no-tracker-when-negative", "skill-loaded", "skill-trigger",
                                                       "no-direct-tracker-write", "tracker-not-committed", "nothing-else-changed"]))
 
     def test_the_checks_that_run_are_known(self):
@@ -118,13 +122,22 @@ class Process(unittest.TestCase):
         self.assertEqual(failed("show", plugins=("other",)), ["skill-loaded"])
 
     def test_an_installed_copy_is_not_the_copy_under_test(self):
-        installed = [{"name": "milestones", "source": "milestones@ondrasek-skills", "path": "/home/u/.claude/plugins/cache/ondrasek-skills/milestones"}]
-        self.assertEqual(failed("show", entries=installed), ["skill-loaded"])
+        # P8: only the installed copy loaded: the plugin under test did not (process) and the environment leaked (precondition)
+        self.assertEqual(failed("show", entries=[INSTALLED]), ["plugin-under-test-isolated", "skill-loaded"])
 
-    def test_an_installed_and_an_inline_copy_together_fail(self):
-        both = [{"name": "milestones", "source": "milestones@inline", "path": "/w/plugins/milestones"},
-                {"name": "milestones", "source": "milestones@ondrasek-skills", "path": "/home/u/cache/milestones"}]
-        self.assertEqual(failed("show", entries=both), ["skill-loaded"])
+    def test_an_installed_and_an_inline_copy_together_are_a_leak_not_a_plugin_failure(self):
+        # R2-6: the plugin under test loaded fine (skill-loaded passes); the extra copy makes the trial INCONCLUSIVE, not FAIL
+        for entries in ([INLINE, INSTALLED], [INSTALLED, INLINE], [INLINE, dict(INLINE)]):
+            self.assertEqual(failed("show", entries=entries), ["plugin-under-test-isolated"])
+        row, events, states = helpers.good("show", entries=[INLINE, INSTALLED])
+        self.assertEqual(run_evals.grade_trial(row, events, states)["verdict"], "INCONCLUSIVE")
+
+    def test_the_isolation_precondition_runs_in_every_case(self):
+        for expect in BARE_EXPECTS:
+            self.assertIn("plugin-under-test-isolated", run(expect), expect)
+
+    def test_an_absent_plugin_is_a_plugin_failure_not_a_leak(self):
+        self.assertEqual(failed("show", plugins=("other",)), ["skill-loaded"])
 
     def test_a_path_equal_to_the_plugin_directory_counts_as_the_copy_under_test(self):
         by_path = [{"name": "milestones", "source": "milestones@local", "path": str(helpers.PLUGIN_DIR)}]
@@ -132,6 +145,7 @@ class Process(unittest.TestCase):
         for plugin, ok in ((str(helpers.PLUGIN_DIR), True), ("", False), ("/elsewhere", False)):
             results = {c: o for c, o, _ in checks.run_checks(checks.Case.build(row, events, states, plugin=plugin))}
             self.assertEqual(results["skill-loaded"], ok, plugin)
+            self.assertEqual(results["plugin-under-test-isolated"], ok, plugin)
 
     def test_no_init_event_fails_skill_loaded(self):
         row, events, states = helpers.good("show")
@@ -215,6 +229,34 @@ class Gates(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual(failed("show", calls=[SKILL_CALL, ("Bash", {"command": SHOW}), ("Bash", {"command": command})]), [])
 
+    def test_a_read_with_a_later_string_argument_is_not_a_write(self):
+        # R2-4 / P3: the mode of open() is the string inside that call, not any later string that starts with w, a or x
+        for command in ["python3 -c \"import json; d=json.load(open('.cache/milestones.json')); print(d['title'], 'at', d['updated'])\"",
+                        "python3 -c \"d=json.load(open('.cache/milestones.json')); print('x', 'y', 'with', 'all')\"",
+                        "python3 -c \"print(len(open('.cache/milestones.json').read()), 'words')\""]:
+            with self.subTest(command=command):
+                self.assertFalse(checks.writes_tracker(command), command)
+                self.assertEqual(failed("show", calls=[SKILL_CALL, ("Bash", {"command": SHOW}), ("Bash", {"command": command})]), [])
+
+    def test_python_writes_in_their_spellings_still_fail(self):
+        for command in ["python3 -c \"open('.cache/milestones.json', 'w').write('{}')\"",
+                        "python3 -c \"open('.cache/milestones.json','wb').write(b'{}')\"",
+                        "python3 -c \"open(os.path.join('.cache', 'milestones.json'), 'w').write('{}')\"",
+                        "python3 -c \"from pathlib import Path; Path('.cache/milestones.json').open('a').write('x')\"",
+                        "python3 -c \"f = open('.cache/milestones.json', mode='w')\""]:
+            with self.subTest(command=command):
+                self.assertTrue(checks.writes_tracker(command), command)
+
+    def test_a_redirect_into_another_file_is_not_a_tracker_write(self):
+        # R2-4: `milestones.json.bak` is not the tracker; the script's own output saved beside it is not a direct write
+        for command in [f'python3 "{helpers.SCRIPT}" show --json > .cache/milestones.json.bak', "cat .cache/milestones.json > /tmp/copy.json",
+                        "cp .cache/milestones.json .cache/milestones.json.bak", "cat .cache/milestones.json 2>&1"]:
+            with self.subTest(command=command):
+                self.assertFalse(checks.writes_tracker(command), command)
+        for command in ["echo x > .cache/milestones.json", "echo x >> '.cache/milestones.json'", "echo x > ./.cache/milestones.json  # note"]:
+            with self.subTest(command=command):
+                self.assertTrue(checks.writes_tracker(command), command)
+
     def test_split_commands_respects_quotes(self):
         self.assertEqual(checks.split_commands("a && b; c | d\ne || f"), ["a ", " b", " c ", " d", "e ", " f"])
         self.assertEqual(checks.split_commands("python3 -c \"x; y | z && w\" ; echo 'a;b'"), ["python3 -c \"x; y | z && w\" ", " echo 'a;b'"])
@@ -258,13 +300,21 @@ class Gates(unittest.TestCase):
 class Outcome(unittest.TestCase):
     def test_a_reply_that_calls_the_current_milestone_finished_fails(self):
         for reply in ("Storage layer is finished; nothing is left before you ship.", "Storage layer: done. Sync API is next.", "Storage layer ✅ then Sync API.",
-                      "Storage layer has been completed."):
+                      "Storage layer has been completed.", "**Storage layer** is done, Sync API is next.", "Storage layer - done", "Storage layer \u2014 completed.",
+                      "Storage layer (done)", "| Storage layer | done |", "Storage layer's done and Sync API is next.", "Storage layer is now already done.",
+                      "storage layer IS FINISHED"):
             with self.subTest(reply=reply):
                 self.assertEqual(failed("show", reply=reply), ["reply-names-current"])
 
     def test_a_reply_that_says_it_is_in_progress_passes(self):
         for reply in ("Schema design is done and Storage layer is in progress.", "Storage layer: in progress, not done yet.", "Storage layer is not done; Sync API is next.",
-                      "Right now: Storage layer (migrations left)."):
+                      "Right now: Storage layer (migrations left).",
+                      # R2-1 / P2, P2b: a sentence boundary or a dash before a counter or a partial status is not "it is finished"
+                      "Done: Schema design. In progress: Storage layer. Completed 1/4; next is Sync API.",
+                      "In progress: Storage layer - done so far: tables; left: migrations.",
+                      "Storage layer. Done 1/4.", "Storage layer: done 1/4 tasks.", "Storage layer: completed tables, left: migrations.",
+                      "Storage layer (done so far: tables).", "Storage layer is almost done.", "1/4 done. Storage layer is next to finish.",
+                      "Finished: Schema design\nDoing: Storage layer\nTodo: Sync API, Release sign-off"):
             with self.subTest(reply=reply):
                 self.assertEqual(failed("show", reply=reply), [])
 
@@ -313,6 +363,12 @@ class Outcome(unittest.TestCase):
         renumbered["items"][3]["id"] = 9
         self.assertEqual(failed("update", after_tracker=renumbered), ["others-untouched"])
 
+    def test_a_want_that_only_says_needs_you_does_not_flag_the_item_as_changed(self):
+        # R2-5 / P13: `4.needs=you` alone names item 4: setting its needs is not a change to an item the prompt did not name
+        after = moved(T, {})
+        after["items"][3]["needs"] = "you"
+        self.assertEqual(failed("update", want="4.needs=you", after_tracker=after), [])
+
     def test_a_refreshed_updated_field_is_required(self):
         stale = moved(T, {2: "done", 3: "doing"})
         stale["updated"] = T["updated"]
@@ -349,6 +405,30 @@ class Precondition(unittest.TestCase):
         events.insert(1, {"type": "system", "subtype": "permission_denied", "tool_name": "Bash", "tool_input": {"command": SET_2_DONE}})
         results = {c: ok for c, ok, _ in checks.run_checks(checks.Case.build(row, events, states))}
         self.assertFalse(results["not-permission-blocked"])
+
+    def test_denials_without_an_id_and_results_without_is_error_do_not_clear_themselves(self):
+        # R2-3 / P5: every script call denied, the denial elements carry no tool_use_id and the tool_results no is_error: still INCONCLUSIVE
+        denials = [{"tool_name": "Bash", "tool_input": {"command": c}} for c in (SET_2_DONE, SET_3_DOING)]
+        row, events, states = helpers.good("update", denials=denials, after_tracker=SAME)
+        results = {c: ok for c, ok, _ in checks.run_checks(checks.Case.build(row, events, states))}
+        self.assertFalse(results["not-permission-blocked"])
+        self.assertEqual(run_evals.grade_trial(row, events, states)["verdict"], "INCONCLUSIVE")
+
+    def test_a_denial_whose_result_reads_like_a_denial_is_not_a_success(self):
+        denied_text = "Permission to use Bash with command python3 milestones.py set has been denied."
+        row, events, states = helpers.good("update", denials=[{"tool_name": "Bash", "tool_input": {"command": SET_2_DONE}}],
+                                           outputs={SET_2_DONE: (denied_text, False)})
+        results = {c: ok for c, ok, _ in checks.run_checks(checks.Case.build(row, events, states))}
+        self.assertFalse(results["not-permission-blocked"])
+
+    def test_a_denial_without_an_id_is_cleared_by_one_more_successful_identical_call(self):
+        denial = {"tool_name": "Bash", "tool_input": {"command": SET_2_DONE}}
+        row, events, states = helpers.good("update", denials=[denial], calls=[SKILL_CALL, ("Bash", {"command": SET_2_DONE}), ("Bash", {"command": SET_2_DONE}),
+                                                                           ("Bash", {"command": SET_3_DOING})])
+        self.assertTrue({c: ok for c, ok, _ in checks.run_checks(checks.Case.build(row, events, states))}["not-permission-blocked"])
+        # with one call only, the denial and the call are the same call
+        row, events, states = helpers.good("update", denials=[denial])
+        self.assertFalse({c: ok for c, ok, _ in checks.run_checks(checks.Case.build(row, events, states))}["not-permission-blocked"])
 
     def test_a_denied_edit_is_not_a_blocked_script(self):
         self.assertEqual(failed("update", denials=[{"tool_name": "Edit", "tool_input": {"file_path": "x"}}]), [])
@@ -430,10 +510,35 @@ class AgentCompleted(unittest.TestCase):
         self.assertFalse(results["agent-completed"][0])
         self.assertIn("error_max_budget_usd", results["agent-completed"][1])
 
-    def test_a_missing_result_event_a_run_note_and_an_empty_reply_did_not_complete(self):
+    def test_a_missing_result_event_and_a_run_note_did_not_complete(self):
         self.assertIn("no result event", self.grade("none", lambda e, s, n: (e[:-1], s, n))["agent-completed"][1])
         self.assertIn("exited 124", self.grade("none", lambda e, s, n: (e, s, "agent command exited 124: timed out"))["agent-completed"][1])
-        self.assertIn("no reply text", self.grade("none", self.keep, reply="")["agent-completed"][1])
+
+    def test_an_empty_final_reply_is_a_completed_run(self):
+        # R2-2 / P1: the Stop hook asks for a silent update and "if nothing changed, do nothing": the last turn may carry no text
+        for expect in ("reminded-update", "reminded-quiet", "update", "none"):
+            with self.subTest(expect=expect):
+                results = self.grade(expect, self.keep, reply="")
+                self.assertTrue(results["agent-completed"][0], expect)
+                self.assertEqual(sorted(c for c, (ok, _) in results.items() if not ok), [], expect)
+
+    def test_a_real_failure_is_not_hidden_behind_an_empty_reply(self):
+        # R2-2 / Q6: reminded-quiet, the agent invents `set 2 --state done`, reply ''
+        invented = moved(tracker("stale-idle"), {2: "done"})
+        results = self.grade("reminded-quiet", self.keep, reply="", after_tracker=invented, calls=[("Bash", {"command": SET_2_DONE})])
+        self.assertEqual(sorted(c for c, (ok, _) in results.items() if not ok), ["quiet-when-nothing-changed"])
+        # Q7: reminded-update, the agent writes the tracker by hand without timestamps, reply ''
+        by_hand = moved(tracker("stale-task"), {2: "done"})
+        by_hand["items"][1].pop("finished")
+        by_hand["updated"] = tracker("stale-task")["updated"]
+        results = self.grade("reminded-update", self.keep, reply="", after_tracker=by_hand, calls=[("Write", {"file_path": ".cache/milestones.json"})])
+        self.assertEqual(sorted(c for c, (ok, _) in results.items() if not ok), ["no-direct-tracker-write", "timestamps-by-script", "written-by-script"])
+        # Q8: the same for the update case
+        results = self.grade("update", self.keep, reply="", after_tracker=moved(T, {2: "done", 3: "doing"}),
+                             calls=[SKILL_CALL, ("Write", {"file_path": ".cache/milestones.json"})])
+        self.assertEqual(sorted(c for c, (ok, _) in results.items() if not ok), ["no-direct-tracker-write", "written-by-script"])
+        row, events, states = helpers.good("reminded-quiet", reply="", after_tracker=invented, calls=[("Bash", {"command": SET_2_DONE})])
+        self.assertEqual(run_evals.grade_trial(row, events, states)["verdict"], "FAIL")
 
     def test_a_missing_or_empty_snapshot_did_not_complete(self):
         # M2: no state.json: both snapshots are absent and every state check would compare None with None

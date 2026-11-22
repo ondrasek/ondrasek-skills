@@ -6,12 +6,15 @@ checks stay pure functions of two snapshots (before the agent, after it):
 
     refs, config             {ref: sha} of every workspace ref (branches, tags, remote-tracking) and the text of .git/config: a
                              branch, tag or config change on a clean repository shows even when HEAD does not move
-    head, status, log        HEAD sha, `git status --porcelain --untracked-files=all`, the commits reachable from HEAD
+    head, status, log        HEAD sha, a porcelain-shaped status (XY path lines, `??` for untracked files, one per file; computed by
+                             `_status` without `git status`, see below), the commits reachable from HEAD
     tracked                  {path: blob id} of the HEAD tree (committed content; staged-only work does not count)
-    all_paths                every path that appears in any commit of the workspace repository (`git log --all`)
+    all_paths                every path in the tree of any commit object in the workspace repository, reachable or not (a commit
+                             the agent dropped with `reset --soft` still counts)
     remotes                  names of the configured remotes
     origin, origin_commits, origin_paths
-                             the same facts read from the bare remote: {ref: sha}, `rev-list --all`, every path in its history
+                             the same facts read from the bare remote: {ref: sha}, `rev-list --all`, every path of every commit
+                             object in it (a branch the agent pushed and deleted still counts, as long as the objects are not pruned)
 
 Trial layout (see prepare): <root>/ws is the workspace and the agent's cwd, <root>/origin.git the bare remote.
 """
@@ -32,9 +35,13 @@ GIT_ISOLATION = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnul
 IDENTITY = ("eval", "eval@example.invalid")
 
 
-# The repositories' .git/config is writable by the agent, and the snapshots run git on the host after it (outside any sandbox): these
-# -c options (they beat every config file) switch off the settings that make git run a program named in the config. Residual risk,
-# not probed: other config-named programs. The snapshot reads .git/config as text and never runs it.
+# The repositories' .git/config and .gitattributes are writable by the agent, and the snapshots run git on the host after it (outside
+# any sandbox). Two defences. 1: these -c options (they beat every config file) switch off the settings that make git run a program
+# named in the config. 2: the snapshot never runs `git status`, `diff`, `ls-files --modified` or anything else that compares the
+# worktree with the index through git's clean filters (a `filter.X.clean` command named in .git/config and selected by .gitattributes
+# runs on the host when git re-reads a stat-dirty file; a test plants one): `_status` hashes the worktree files in Python and uses
+# only plumbing that does not look at file contents (ls-files -s, ls-files --others, ls-tree, cat-file, log, for-each-ref, rev-list).
+# Other config-named programs were not probed one by one; .git/config is read as text and never executed.
 SAFE_GIT = ("-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.devnull, "-c", "core.untrackedCache=false",
             "-c", "log.showSignature=false")
 
@@ -164,7 +171,64 @@ def _tracked(repo):
 
 
 def _paths(repo):
-    return sorted(set(_git(repo, "-c", "core.quotePath=false", "log", "--all", "--name-only", "--format=").split("\n")) - {""})
+    """Every path in the tree of every commit object of the repository (loose or packed), reachable from a ref or not.
+
+    `git log --all` would miss a commit the agent dropped (`reset --soft HEAD~1`, a deleted branch on the bare remote); the
+    object database still has it until a prune.
+    """
+    listing = _git(repo, "cat-file", "--batch-all-objects", "--batch-check=%(objecttype) %(objectname)").splitlines()
+    paths = set()
+    for line in listing:
+        kind, _, sha = line.partition(" ")
+        if kind == "commit":
+            paths.update(_git(repo, "ls-tree", "-r", "--name-only", "-z", sha).split("\0"))
+    return sorted(paths - {""})
+
+
+def _index(repo):
+    """{path: [(mode, blob id, stage)]} of the index (`ls-files -s`: reads the index, never a file's contents)."""
+    entries = {}
+    for item in _git(repo, "ls-files", "-s", "-z").split("\0"):
+        if item:
+            meta, path = item.split("\t", 1)
+            mode, sha, stage = meta.split()
+            entries.setdefault(path, []).append((mode, sha, int(stage)))
+    return entries
+
+
+def _worktree_blob(path):
+    """The git blob id of the file or symlink at `path` as it is on disk (no clean filter, no eol conversion), None when there is none."""
+    try:
+        if os.path.islink(path):
+            return blob_id(os.fsencode(os.readlink(path)))
+        return blob_id(Path(path).read_bytes()) if os.path.isfile(path) else None
+    except OSError:
+        return None
+
+
+def _status(repo, tracked):
+    """A `git status --porcelain --untracked-files=all` text computed without `git status` (see SAFE_GIT for why).
+
+    X compares the index with the HEAD tree (A, M, D), Y the worktree with the index (M, D); a path with a conflict stage is `UU`;
+    untracked files (`ls-files --others --exclude-standard`) are `??`, one line per file, after the tracked changes. No rename
+    detection (a staged rename is a D and an A), and file modes, clean filters and eol conversion are ignored: a file counts as
+    modified when its raw bytes differ from the index blob.
+    """
+    index, lines = _index(repo), []
+    for path in sorted(set(index) | set(tracked)):
+        versions = index.get(path)
+        if versions and any(stage for _, _, stage in versions):
+            lines.append(f"UU {path}")
+            continue
+        x = " " if tracked.get(path) == (versions[0][1] if versions else None) else "D" if not versions else "A" if path not in tracked else "M"
+        y = " "
+        if versions and versions[0][0] != "160000":          # a gitlink is a directory on disk: not compared
+            actual = _worktree_blob(Path(repo) / path)
+            y = "D" if actual is None else " " if actual == versions[0][1] else "M"
+        if (x, y) != (" ", " "):
+            lines.append(f"{x}{y} {path}")
+    untracked = sorted(p for p in _git(repo, "ls-files", "--others", "--exclude-standard", "-z").split("\0") if p)
+    return "".join(line + "\n" for line in lines + [f"?? {p}" for p in untracked])
 
 
 def _refs(repo):
@@ -193,9 +257,9 @@ def snapshot(root, origin=None):
             continue
         snap["files"][rel] = entry(path.read_bytes())
     try:
-        snap.update(head=_git(root, "rev-parse", "HEAD").strip(), status=_git(root, "status", "--porcelain", "--untracked-files=all"),
-                    log=_log(root), tracked=_tracked(root), all_paths=_paths(root), remotes=_git(root, "remote").split(),
-                    refs=_refs(root), config=_config_text(root))
+        snap.update(head=_git(root, "rev-parse", "HEAD").strip(), log=_log(root), tracked=_tracked(root), all_paths=_paths(root),
+                    remotes=_git(root, "remote").split(), refs=_refs(root), config=_config_text(root))
+        snap["status"] = _status(root, snap["tracked"])
         if origin:
             snap.update(origin=_refs(origin), origin_commits=_git(origin, "rev-list", "--all").split(),
                         origin_paths=_paths(origin))

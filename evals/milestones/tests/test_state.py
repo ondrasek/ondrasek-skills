@@ -5,6 +5,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import helpers
 import checks
@@ -97,6 +98,31 @@ class Workspace(unittest.TestCase):
         self.assertEqual(list(hooks_path.iterdir()), [])
         self.assertNotIn(ws, hooks_path.parents)
         self.assertEqual(git(ws, "symbolic-ref", "--short", "HEAD").strip(), "main")
+
+    def test_the_harness_git_ignores_a_config_the_agent_wrote_that_names_a_program(self):
+        # R2-7: after the run the harness runs git inside the agent-writable .git; the known exec keys are overridden with -c
+        ws, _ = self.prepare("bare")
+        marker = self.root / "ran"
+        script = self.root / "fsmonitor.sh"
+        script.write_text(f"#!/bin/sh\ntouch {marker}\n")
+        script.chmod(0o755)
+        for key, value in (("core.fsmonitor", str(script)), ("log.showSignature", "true"), ("core.pager", f"touch {marker}")):
+            git(ws, "config", "--local", key, value)
+        self.assertEqual(state._git(ws, "config", "--get", "core.fsmonitor").strip(), "false")
+        self.assertEqual(state._git(ws, "config", "--get", "log.showSignature").strip(), "false")
+        self.assertEqual(state._git(ws, "config", "--get", "core.hooksPath").strip(), os.devnull)
+        self.assertEqual(len(state.snapshot(ws)["head"]), 40)
+        self.assertFalse(marker.exists())
+
+    def test_the_harness_git_does_not_inherit_a_git_dir_from_the_caller(self):
+        # R2-7: a harness started from a git hook has GIT_DIR set; the fixture's git must still act on the fixture
+        ws, _ = self.prepare("bare")
+        decoy = self.root / "decoy"
+        decoy.mkdir()
+        with mock.patch.dict(os.environ, {"GIT_DIR": str(decoy / ".git"), "GIT_WORK_TREE": str(decoy), "GIT_INDEX_FILE": str(decoy / "index")}):
+            snap = state.snapshot(ws)
+        self.assertEqual(snap["head"], git(ws, "rev-parse", "HEAD").strip())
+        self.assertEqual(snap["tracked"], [".gitignore", "README.md", "src/textutil.py"])
 
     def test_a_commit_by_the_agent_needs_no_other_configuration(self):
         ws, _ = self.prepare("bare")
