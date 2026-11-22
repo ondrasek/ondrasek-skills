@@ -12,7 +12,7 @@ negative-single        negative    none     no       1/1     PASS    -
 negative-list          negative    list     no       1/1     PASS    -
 negative-one-decision  negative    none     no       1/1     PASS    -
 
-checks passed by group: outcome 43/43, process 22/22, style 37/37, efficiency 30/30
+checks passed by group: outcome 43/43, process 33/33, style 37/37, efficiency 30/30
 cost reported by the result events: $0.1760 over 11 runs
 summary: prompts passed 11/11 (every trial), trials passed 11/11, pass rate 100%
 (exit code 0)

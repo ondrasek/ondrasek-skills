@@ -77,3 +77,48 @@ GOOD_ITEM = (
     "2. SQLite: no server, one writer.\n"
     "**Recommendation:** Option 1, because growth is expected.\n"
     "**One question:** Which database should the first release use?")
+
+
+# ---- the tool path (AskUserQuestion): INVENTED traces; the event shape is the assumed one, UNCONFIRMED (README, "The tool path") ----
+COUNT_LINE = "5 items need you. First one:"
+GOOD_TOOL_INPUT = {"questions": [{
+    "header": "Decision",
+    "question": ("Item 1 of 5, decision: Pick the database. The first release needs one database. "
+                 "The choice sets hosting cost and the backup plan. Which database should the first release use?"),
+    "multiSelect": False,
+    "options": [
+        {"label": "Postgres (Recommended)", "description": "More setup, handles many users; growth is expected."},
+        {"label": "SQLite", "description": "No server, one writer at a time."},
+        {"label": "Skip for now", "description": "Park this item and move on."},
+    ],
+}]}
+
+
+def make_tool_events(inputs=(GOOD_TOOL_INPUT,), text=COUNT_LINE, called=("oaat:oaat",), searches=(), turns=2, tools=("Skill", "AskUserQuestion"), cost=0.01):
+    """The events of one INVENTED turn on the tool path: init, Skill calls, ToolSearch calls, then an assistant message with an
+    optional text block and one AskUserQuestion tool_use per entry of `inputs`, and the result event (the text is the reply)."""
+    events = [{"type": "system", "subtype": "init", "session_id": "INVENTED-unit-test", "skills": ["oaat:oaat"], "tools": list(tools)}]
+    for name in called:
+        events.append({"type": "assistant", "parent_tool_use_id": None,
+                       "message": {"content": [{"type": "tool_use", "id": "toolu_INVENTED", "name": "Skill", "input": {"skill": name}}]}})
+    for query in searches:
+        events.append({"type": "assistant", "parent_tool_use_id": None,
+                       "message": {"content": [{"type": "tool_use", "id": "toolu_INVENTED_S", "name": "ToolSearch", "input": {"query": query, "max_results": 1}}]}})
+    content = ([{"type": "text", "text": text}] if text else []) + [
+        {"type": "tool_use", "id": f"toolu_INVENTED_Q{i}", "name": "AskUserQuestion", "input": tool_input} for i, tool_input in enumerate(inputs)]
+    events.append({"type": "assistant", "parent_tool_use_id": None, "message": {"content": content}})
+    events.append({"type": "result", "subtype": "success", "is_error": False, "result": text, "num_turns": turns, "total_cost_usd": cost})
+    return events
+
+
+def tool_input(**changes):
+    """A deep copy of GOOD_TOOL_INPUT; `changes` replace keys of its one question (header, question, options, multiSelect)."""
+    import copy
+    data = copy.deepcopy(GOOD_TOOL_INPUT)
+    data["questions"][0].update(changes)
+    return data
+
+
+def tool_case_for(prompt_id="explicit-dollar", **kwargs):
+    """A Case for a one-turn row on the tool path; `kwargs` go to make_tool_events."""
+    return checks.Case.build(ROWS[prompt_id], make_tool_events(**kwargs))

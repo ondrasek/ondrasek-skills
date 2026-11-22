@@ -296,8 +296,13 @@ def check_wrapup(case):
     return ("wrapup-headings", ok, "Decided, Parked, Next action, in order" if ok else f"missing: {', '.join(missing) or 'none'}; in order: {ordered}")
 
 
+# The tangent flag may name the current item as X ("This may be a tangent from Item 1 of 5, the database decision. Continue or refocus?"):
+# that is the skill's own sentence, not an item header. A real run (2026-11-22) was wrongly failed for it.
+TANGENT_FLAG_RE = re.compile(r"this may be a tangent from.*?continue or refocus\?", re.IGNORECASE | re.DOTALL)
+
+
 def check_no_header(case):
-    found = headers(case.reply)
+    found = headers(TANGENT_FLAG_RE.sub("", case.reply))
     return ("no-oaat-header", not found, f"'Item N of M' headers in the reply: {len(found)}; expected 0")
 
 

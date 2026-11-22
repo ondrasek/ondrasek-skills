@@ -14,6 +14,13 @@ A follow-up row has two turns, as in a real session (a `reply` in evals/prompts.
 first message, which loads the skill and shows item 1, then the answer to the user's second message.
     negative-list      the skill triggers on a request for a full list (a false positive)
 
+A third set, `tool/`, holds two INVENTED traces of the tool path (an item presented with the AskUserQuestion tool). They exist because a
+headless `claude -p` run cannot call that tool (measured), so the tool path can only be graded offline; the event shape is the assumed,
+UNCONFIRMED standard one (README, "The tool path (AskUserQuestion)"):
+
+    explicit-dollar    the count line, then one AskUserQuestion call for item 1
+    followup-skip      turn 1 as above, turn 2 (after "skip") a call for item 2 and no text at all
+
 Run `python3 tests/build_fixtures.py` to rewrite the files; a test checks that the committed files equal this output.
 """
 import json
@@ -145,13 +152,56 @@ def turns(prompt_id, reply, call_skill, index):
     return events(prompt_id, FIRST_TURN, call_skill, index) + events(prompt_id, reply, False, index)
 
 
+def tool_input(n, m, kind, title, what, why, question, options, header=None):
+    """The input of one AskUserQuestion call in the skill's shape. options: [(label, description)], the recommended one first."""
+    skip = {"label": "Skip for now", "description": "Park this item and move on."}
+    return {"questions": [{"header": header or kind.capitalize(), "multiSelect": False,
+                           "question": f"Item {n} of {m}, {kind}: {title}. {what} {why} {question}",
+                           "options": [{"label": label, "description": description} for label, description in options] + [skip]}]}
+
+
+TOOL_FIRST = tool_input(
+    1, 5, "decision", "Pick the database", "The first release needs one database.", "The choice sets hosting cost and the backup plan.",
+    "Which database should the first release use?",
+    [("Postgres (Recommended)", "More setup, handles many users; growth is expected."), ("SQLite", "No server, one writer at a time.")])
+TOOL_SECOND = tool_input(
+    2, 5, "question", "Confirm the launch date", "Marketing needs a date by Friday.", "The announcement plan waits for it.",
+    "Which launch date should marketing get?",
+    [("Friday the 14th (Recommended)", "Matches the audit plan; leaves a week of slack."), ("The following Monday", "More slack, later announcement.")])
+TOOL = {"explicit-dollar": [("5 items need you. First one:", TOOL_FIRST)],
+        "followup-skip": [("5 items need you. First one:", TOOL_FIRST), ("", TOOL_SECOND)]}
+
+
+def tool_events(prompt_id, text, tool_input, call_skill, index):
+    """One INVENTED turn on the tool path: the optional count line and one AskUserQuestion call, then the result event."""
+    session = f"INVENTED-tool-{prompt_id}"
+    out = [{"type": "system", "subtype": "init", "session_id": session, "cwd": "/invented/fixture", "model": "invented-model",
+            "claude_code_version": "INVENTED", "tools": ["Skill", "AskUserQuestion"], "skills": SKILLS, "plugins": [], "mcp_servers": []}]
+    if call_skill:
+        out.append({"type": "assistant", "parent_tool_use_id": None, "session_id": session,
+                    "message": {"role": "assistant", "content": [{"type": "tool_use", "id": f"toolu_INVENTED_{index}", "name": "Skill",
+                                                                  "input": {"skill": "oaat:oaat"}}]}})
+        out.append({"type": "user", "parent_tool_use_id": None, "session_id": session,
+                    "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"toolu_INVENTED_{index}",
+                                                             "content": "INVENTED tool result"}]}})
+    content = ([{"type": "text", "text": text}] if text else []) + [
+        {"type": "tool_use", "id": f"toolu_INVENTED_Q{index}", "name": "AskUserQuestion", "input": tool_input}]
+    out.append({"type": "assistant", "parent_tool_use_id": None, "session_id": session, "message": {"role": "assistant", "content": content}})
+    out.append({"type": "result", "subtype": "success", "is_error": False, "session_id": session, "result": text,
+                "num_turns": 2 if call_skill else 1, "duration_ms": 3000 + 100 * index, "total_cost_usd": round(0.01 + 0.001 * index, 4),
+                "stop_reason": "end_turn"})
+    return out
+
+
 def build():
-    """{(set, prompt id): jsonl text} for both sets."""
+    """{(set, prompt id): jsonl text} for the sets after, before and tool."""
     files = {}
     for index, prompt_id in enumerate(AFTER, start=1):
         files[("after", prompt_id)] = turns(prompt_id, AFTER[prompt_id], prompt_id not in NO_SKILL, index)
         before_calls = (prompt_id not in NO_SKILL and prompt_id != "implicit-walk") or prompt_id in SKILL_CALLED_BEFORE
         files[("before", prompt_id)] = turns(prompt_id, BEFORE[prompt_id], before_calls, index)
+    for index, (prompt_id, steps) in enumerate(TOOL.items(), start=1):
+        files[("tool", prompt_id)] = [e for n, (text, tool_input_) in enumerate(steps) for e in tool_events(prompt_id, text, tool_input_, n == 0, index)]
     return {key: "".join(json.dumps(e, sort_keys=True) + "\n" for e in value) for key, value in files.items()}
 
 
@@ -164,4 +214,4 @@ def write(directory=FIXTURES):
 
 if __name__ == "__main__":
     write()
-    print(f"wrote {2 * len(AFTER)} traces under {FIXTURES}", file=sys.stderr)
+    print(f"wrote {2 * len(AFTER) + len(TOOL)} traces under {FIXTURES}", file=sys.stderr)

@@ -20,6 +20,8 @@ It was developed as a teaching sample for the course PA015 (Masaryk University) 
 **One question:** one concrete question
 ```
 
+Since `oaat` 0.3.0 that template is the **fallback**: when the `AskUserQuestion` tool is available the skill presents the item with that tool instead (see "The tool path (AskUserQuestion)"). Real eval runs are headless and only ever see the fallback.
+
 Other rules: "skip" parks an item, "stop" gives a wrap-up (**Decided**, **Parked**, **Next action**), a tangent gets the flag "This may be a tangent from X. Continue or refocus?". The harness takes the skill's **name** (`--skill`, default `oaat`) and an optional **path** (`--skill-path`, `--skill-file`), so it grades any skill with a fixed reply shape.
 
 Not to be confused with `claude plugin eval`, the Claude Code CLI's own eval runner (it reads `case.yaml` or `prompt.md` cases from an `evals/` directory *inside a plugin*). This harness is separate, lives at the repository root and ships with no plugin.
@@ -79,7 +81,7 @@ The first check of every trace, `skill-loaded`, reads the `skills` list of the `
 
 `make run` prints five sections; `captures/` holds one file per section. Four sections grade invented traces, so their numbers show how the harness reads a run and say nothing about the skill's real quality. The section `real` grades one recorded run.
 
-- **`captures/grade-after.txt`**: the table of the run with the edited skill. All 11 prompts pass, every check of every group (`checks passed by group: outcome 43/43, process 22/22, style 31/31, efficiency 30/30`), `pass rate 100%`, exit code 0.
+- **`captures/grade-after.txt`**: the table of the run with the edited skill. All 11 prompts pass, every check of every group (`checks passed by group: outcome 43/43, process 33/33, style 37/37, efficiency 30/30`), `pass rate 100%`, exit code 0.
 - **`captures/grade-before.txt`**: the same prompts with five planted defects, each caught by a named check:
 
   | Prompt | Defect | Failed checks |
@@ -166,6 +168,48 @@ The `Question:` label failed on the same rows in every earlier run, so a skill e
 
 The original skill described the reply as a list of five parts, and real replies then differed from run to run: lettered or numbered options, the recommendation inside an option or in a bullet after the list, `Question:` for `One question:`. On 2026-11-05 the author set one structure: options always numbered, the recommendation on a line of its own after the options, never a bullet. The checks `options-numbered` and `recommended-marked` test it, and `plugins/oaat` (version 0.2.0) now carries the template in section 3 and the wrap-up. **First real run of the template (2026-11-07, all 11 prompts, 3 trials, no judge, $0.64; first recorded as $0.76 by the old sum):** 8 of 11 prompts passed every trial, 28 of 33 trials. `process` 66/66 and `style` 111/111: the template removed the `sections`, `options-numbered` and `recommended-marked` failures of the original. Failures: `followup-tangent` 0/3 (the replies paraphrased the flag as "This looks like a tangent…" and showed the item header again: the tangent bullet was still loose prose), and `length-bound` on two replies of 154 and 170 words (the bound was raised from 150 to 180 words). **The fix:** the tangent rule became a template (oaat 0.2.1: the exact flag sentence, nothing else). `followup-tangent` re-run, 3 trials ($0.11; first recorded as $0.20 by the old sum): 3/3 pass. **Full re-run on 0.2.1 (2026-11-07, 11 prompts, 3 trials, no judge, $0.65; first recorded as $0.81 by the old sum):** 11 of 11 prompts passed every trial, 33 of 33 trials; every group at 100% (outcome 129/129, process 66/66, style 111/111, efficiency 90/90). Caveat: the word bound (180) was raised after the first run showed two replies above 150, so part of this pass rate is that change; the replies are no longer than before. Three trials per prompt is a small sample: a prompt that passes 3/3 can still be flaky.
 
+## The tool path (AskUserQuestion)
+
+**What the skill does.** Since version 0.3.0 (`plugins/oaat/skills/oaat/SKILL.md`, section 3), when the `AskUserQuestion` tool is in the agent's tool list the skill presents each item with exactly ONE call with exactly ONE question, never batched: `header` is the item type in one or two words (at most 12 characters); `question` is `Item N of M, type: Title.`, then what it is and why it matters in two short sentences, then one concrete question (the only question mark); `options` are the item's one to three choices, each with a short `label` and a one-line trade-off `description`, the recommended one first with a label ending in `(Recommended)`, plus a last option labelled `Skip for now` (description `Park this item and move on.`), so two to four options; `multiSelect` is `false`. Nothing else is printed in that message except the one-line count before the first item. If the tool is not in the list (headless `claude -p`, subagents), or the call is denied or fails, the agent uses the text template silently and must not search for the tool (no `ToolSearch` for it).
+
+**Real headless runs cannot call it (measured).** A real probe on Claude Code 2.1.330: in a headless `claude -p` run the tool is not available at all; the model's `ToolSearch` for it returned `No matching deferred tools found`. So every real eval run exercises the text fallback only, and the tool-path checks are **offline-only**: they run on invented traces and are **UNCONFIRMED against a real interactive trace**.
+
+**What the harness decided** (decisions of the author): the text template stays the fallback and is graded exactly as before; the tool path is tested offline on invented traces plus the live runs of the fallback; the author does one interactive smoke test by hand (below).
+
+**The assumed event shape (UNCONFIRMED).** The `tool_use` event shape of this tool is not documented in the pages that this harness cites. The checks assume the standard stream-json shape, an assistant message content block:
+
+```json
+{"type": "tool_use", "name": "AskUserQuestion", "input": {"questions": [
+  {"question": "Item 1 of 5, decision: Pick the database. ... Which database should the first release use?",
+   "header": "Decision",
+   "multiSelect": false,
+   "options": [{"label": "Postgres (Recommended)", "description": "More setup; handles many users."},
+               {"label": "SQLite", "description": "No server; one writer at a time."},
+               {"label": "Skip for now", "description": "Park this item and move on."}]}]}}
+```
+
+If a real interactive trace differs (another tool name, another nesting), `python/ask_tool.py` is the one place to change, and the tests then show what else moves.
+
+**How a turn is graded (the branching).** `Case.tool_path` is true when the last turn of the trace (the events after the previous `result` event) holds an `AskUserQuestion` tool call of the main conversation and the row's `expect` is `item` or `skip`. Then `run_checks` runs the common checks, the four outcome checks on the question text, and the seven tool checks. Otherwise it runs what it ran before: the common checks plus the checks of the row's `expect`. The selection follows the call, not the reply text: a turn that makes the call and also prints the template fails `tool-no-extra-text`. A skip row on the tool path reads the previous item number from the earlier turn's question text. `tests/test_tool_path.py` (`SelectionTests`, `GoodTracesTests`) pins this: a good tool-path trace passes all 17 applicable checks, and a good fallback trace passes the 16 checks that ran before plus `no-tool-search`.
+
+**`no-tool-search` guards the fallback.** It applies to every row on both paths. The skill says "do not search for it", and the measured fact is that in a headless run the search finds nothing, so a search is a wasted call on every real run. A real trace that searches for the tool fails this check even when its reply is perfect. The 44 recorded real traces in `artifacts/` (checked 2026-11-22; they are the pre-0.3.0 runs) and the committed `tests/fixtures/traces/real/` trace hold no such search and pass it (a test pins this for the committed ones); each trial now has one more check, so the 11 prompts count 143 checks per full run where the recorded run before 0.3.0 counted 132.
+
+**Failing runs.** `tests/test_tool_path.py` holds a `MUTATIONS` registry like those of the other harnesses: one invented failing run for each of the eight new checks, each failing only its own check. `test_every_new_check_has_a_failing_run` compares the registry with `checks.GROUPS` against the fixed list of ids that existed before, so a new check without a failing run fails the suite. `VariantTests` holds more failing runs per check (two questions in one call, five options, `skip for now` in lower case, a numbered option printed next to the call, a search for the tool before a successful call, ...). The invented traces are built in code (`tests/helpers.py`: `make_tool_events`, `GOOD_TOOL_INPUT`) and two small JSONL files are committed under `tests/fixtures/traces/tool/` (`explicit-dollar`: count line and a call for item 1; `followup-skip`: turn 2 is a call for item 2 and no text), built by `tests/build_fixtures.py`. Grade them offline:
+
+```
+python3 python/run_evals.py --fixtures tests/fixtures/traces/tool --only explicit-dollar,followup-skip
+```
+
+The shared reader `evals/_common/python/agent_trace.py` was not changed. The helpers that find the last turn and the tool calls (`split`, `ask_calls`, `text_outside`, `searched_for_tool`) live in `python/ask_tool.py` of this harness, because no other harness needs them; if one does, they belong in `_common`.
+
+**Manual interactive smoke test (by hand, about five minutes).** The only way to confirm the shape and the behaviour:
+
+1. Make a throwaway directory and open an interactive Claude Code session in it with the plugin loaded: `claude --plugin-dir /path/to/ondrasek-skills/plugins/oaat`.
+2. Ask: `Use the oaat skill and walk me through three pending items: pick a database (Postgres or SQLite), confirm a launch date, assign a security review. These are invented.`
+3. Confirm for each item: one question per call (a question dialog, never several at once); at most 4 options; the recommended option first with the label suffix `(Recommended)`; `Skip for now` last; the header is at most 12 characters; the question starts with `Item N of M, type: Title.` and has one question mark; nothing else printed (the first message may carry the one-line count, no others).
+4. Pick `Skip for now` once and check that the agent moves on, and that the wrap-up (ask for it with "stop") lists the item under Parked. Type a free-text answer once ("Other") and check that it is read as an answer.
+5. To record a trace for this harness, run the same prompt in a headless session that has the tool, if your version has one, with `--output-format stream-json --verbose`, and check the `tool_use` block against the shape above. That is the one step that can turn "UNCONFIRMED" into "confirmed".
+
 ## The prompt table (`evals/prompts.csv`)
 
 Columns: `id`, `should_trigger`, `kind`, `expect`, `prompt`, `reply`. The OpenAI post uses three (`id`, `should_trigger`, `prompt`). The sample adds `kind` (what the prompt tests), `expect` (which checks apply to the reply) and `reply` (optional: the user's second message of a two-turn row).
@@ -222,6 +266,21 @@ Each check is a pure function of a `Case` (the prompt row, the events of the tra
 | `tangent-flag` | outcome | tangent | "This may be a tangent from X. Continue or refocus?" |
 | `all-items-listed` | outcome | list | every pending title appears in the reply |
 | `no-oaat-header` | outcome | stop, tangent, list, none | no `Item N of M` in the reply |
+| `no-tool-search` | process | all (both paths) | no `ToolSearch` call whose input mentions `AskUserQuestion` (any spelling: `AskUserQuestion`, `ask user question`, ...) |
+
+**The tool-path checks** apply instead of the text-template style checks when the graded turn of an `item` or `skip` row calls `AskUserQuestion` (next section). They read the first call of the turn; the `Case` properties `turn` and `tool_path` and the helpers in `python/ask_tool.py` find it.
+
+| Id | Group | Passes when |
+|---|---|---|
+| `tool-one-call-one-question` | process | exactly one `AskUserQuestion` call in the turn, with exactly one question |
+| `tool-header-short` | style | `header` is a non-empty string of at most 12 characters (`MAX_TOOL_HEADER`) |
+| `tool-options-shape` | style | 2 to 4 options, each with a non-empty `label` and `description`; `multiSelect` is `false` or absent |
+| `tool-recommended-first` | style | the first option's label ends with `(Recommended)` and no other label does |
+| `tool-skip-last` | style | the last option's label is exactly `Skip for now` |
+| `tool-question-shape` | style | the question starts with `Item N of M, type: Title.` (type and title present) and has exactly one `?` |
+| `tool-no-extra-text` | style | the text outside the call is at most one line of at most 20 words (`MAX_COUNT_LINE_WORDS`): no numbered or bulleted line, no `Item N of M` header, no template label |
+
+On the tool path these outcome checks still run, on the **text of the question** (the item is there, not in the reply): `header-number`, `header-total`, `no-other-items`, `no-preview`. `completed` also accepts a turn with no text at all when it holds the tool call. The text-template style checks (`one-header`, `sections`, `options-max-3`, `options-numbered`, `recommended-marked`, `one-question`, `length-bound`) do not run on that path.
 
 The bounds (`MAX_REPLY_LINES`, `MAX_REPLY_WORDS`, `MAX_OPTIONS`, `MAX_OTHER_TOOL_CALLS`, `MAX_TURNS`) are constants at the top of `checks.py`. The skill asks for "about 8 lines", and the bound of 12 lines leaves room for the intro line and a confirmation. Change a bound when your skill needs another one, and re-run the tests.
 
@@ -275,6 +334,7 @@ Two flags of the default agent command come from the same documentation:
 - **The fixtures `after/` and `before/` are invented.** They prove that each check reads the stream shape and fails where it should; they say nothing about how `oaat` behaves. `real/` holds one recording of one prompt: it says what that run did and nothing about the other ten prompts.
 - **A check of verbatim text misses a paraphrase.** See "What the deterministic checks can see".
 - **`header-total` assumes M is the number of pending items.** A skill version that counts only open items would fail this check on a follow-up; adjust the check to the skill's rule.
+- **The tool path is graded offline only, on an assumed event shape.** No real trace of an `AskUserQuestion` call exists in this repository (the tool is not available in headless runs), so the seven tool checks have never read a real trace. They prove that the checks read the assumed shape and fail where they should, nothing about the real tool.
 - **The `input.skill` field is verified once**, on one version (see the table above). The documentation does not list it.
 - **The bounds are guesses.** `MAX_REPLY_WORDS` started at 150 and was raised to 180 on 2026-11-07, after a 33-run template run put two correct replies at 154 and 170 words. `MAX_REPLY_WORDS` (first value 150) and `MAX_REPLY_LINES` (12) came from the skill's "about 8 lines" and from that reply (143 words and 9 lines without the closing block). Run 3 to 5 trials of every prompt, then set the bounds from the replies that you accept.
 - **The judge is a model.** Its verdict can differ between runs.
@@ -304,11 +364,13 @@ The post of OpenAI says the same: "add rows whenever a manual test reveals a mis
 |---|---|
 | `evals/prompts.csv` | the 11 test prompts: `id`, `should_trigger`, `kind`, `expect`, `prompt`, `reply` (three rows have a second turn) |
 | `python/run_evals.py` | the runner: prompt rows to agent runs to saved traces to checks (and the judge), the table, the summary, the exit code |
-| `python/checks.py` | the deterministic checks and the four groups |
+| `python/checks.py` | the deterministic checks and the four groups (the tool-path checks included) |
+| `python/ask_tool.py` | helpers for the tool path: the last turn of a trace, the `AskUserQuestion` calls, the text outside them, the `ToolSearch` calls |
 | `../_common/python/agent_trace.py`, `runner_cmd.py` | the stream-json reader (the fields in the table above) and the command helper, shared: `evals/_common` |
 | `python/cases.py`, `judge.py`, `rubric.schema.json`, `report.py`, `demo.py`, `measure.py` | CSV loader, rubric judge and schema, before/after report, offline demo, timing |
-| `tests/` | one test file per module, `test_skill.py` (the live plugin is the subject), `test_fixtures.py` (traces and captures equal their sources), stub agent and judge |
+| `tests/` | one test file per module (170 tests), `test_skill.py` (the live plugin is the subject), `test_fixtures.py` (traces and captures equal their sources), `test_tool_path.py` (the tool path: selection, `MUTATIONS`, variants), stub agent and judge |
 | `tests/fixtures/traces/after/`, `before/` | the INVENTED traces, 11 per set; `tests/fixtures/README.md` explains the marks of invention |
+| `tests/fixtures/traces/tool/` | two INVENTED traces of the tool path (UNCONFIRMED event shape) |
 | `tests/fixtures/traces/real/` | one REAL trace (`explicit-name`), trimmed by `tests/trim_real_trace.py` |
 | `captures/` | the recorded output of `make grade-fixtures` |
 | `Makefile`, `python/Makefile` | the entry points |

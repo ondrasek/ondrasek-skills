@@ -190,6 +190,14 @@ class OtherExpectChecks(unittest.TestCase):
         self.assertFalse(passes(case_for(TANGENT, "Podman is nice. Back to the database?"), "tangent-flag"))
         self.assertFalse(passes(case_for(TANGENT, "This may be a tangent. Continue or refocus?"), "tangent-flag"))
 
+    def test_the_tangent_flag_may_name_the_item_without_counting_as_a_header(self):
+        # a real reply (2026-11-22): the flag names the current item as X; that is the skill's own sentence
+        flag = "This may be a tangent from Item 1 of 5, the database decision. Continue or refocus?"
+        self.assertTrue(passes(case_for(TANGENT, flag), "no-oaat-header"))
+        # a header or a 'Back to item 1 of 5' outside the flag still fails
+        self.assertFalse(passes(case_for(TANGENT, flag + "\nBack to Item 1 of 5."), "no-oaat-header"))
+        self.assertFalse(passes(case_for(TANGENT, flag + "\n**Item 1 of 5, decision: Database**"), "no-oaat-header"))
+
     def test_a_tangent_reply_asks_one_question(self):
         good = "This may be a tangent from the database decision. Continue or refocus?"
         self.assertTrue(passes(case_for(TANGENT, good), "one-question"))
@@ -210,7 +218,7 @@ class RunChecksTests(unittest.TestCase):
     def test_the_good_reply_passes_every_check_that_applies(self):
         results = checks.run_checks(case_for(ITEM, GOOD_ITEM))
         self.assertEqual([cid for cid, ok, _ in results if not ok], [])
-        self.assertEqual(len(results), 16)
+        self.assertEqual(len(results), 17)   # 16 before the tool path + no-tool-search
 
     def test_each_result_is_an_id_a_boolean_and_a_note(self):
         for cid, ok, note in checks.run_checks(case_for(ITEM, "nothing useful")):
