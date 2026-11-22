@@ -9,11 +9,17 @@ explains itself. The checks fall into the four groups of the OpenAI post (https:
     efficiency  did the agent stay short and avoid detours?
 
 Which checks apply to a prompt depends on its `expect` column (see run_checks).
+
+A second path exists: when the turn calls the `AskUserQuestion` tool for an item (expect item or skip), the item is in the tool
+input and not in the reply text, so the text-template style checks give way to the tool checks (see `Case.tool_path` and
+`run_checks`). A turn without that call is graded exactly as before. The tool path can only be exercised on invented traces: a
+headless `claude -p` run has no such tool (README, "The tool path").
 """
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import agent_trace as trace
+import ask_tool
 from cases import HEADER_RE, Row, pending_titles, previous_header_number, previous_header_title
 
 MAX_REPLY_LINES = 12     # non-empty lines; the skill asks for about 8 lines for one item
@@ -21,6 +27,11 @@ MAX_REPLY_WORDS = 180
 MAX_OPTIONS = 3
 MAX_OTHER_TOOL_CALLS = 2  # tool calls besides Skill
 MAX_TURNS = 4             # Skill call, reply, and slack for one retry
+MAX_TOOL_HEADER = 12      # characters of the AskUserQuestion `header`
+MIN_TOOL_OPTIONS, MAX_TOOL_OPTIONS = 2, 4   # the item's 1 to 3 choices plus `Skip for now`
+RECOMMENDED_SUFFIX = "(Recommended)"
+SKIP_LABEL = "Skip for now"
+MAX_COUNT_LINE_WORDS = 20  # the one-line count before the first item ("5 items need you. First one:")
 
 LABELS = ("what it is", "why it matters", "options", "one question")
 WRAPUP_LABELS = ("decided", "parked", "next action")
@@ -36,6 +47,10 @@ GROUPS = {
     "no-oaat-header": "outcome",
     "one-header": "style", "sections": "style", "options-max-3": "style", "options-numbered": "style", "recommended-marked": "style", "one-question": "style",
     "length-bound": "efficiency", "tool-detours": "efficiency", "turns-bound": "efficiency",
+    # the tool path (AskUserQuestion): offline-only checks, see the README section "The tool path (AskUserQuestion)"
+    "no-tool-search": "process", "tool-one-call-one-question": "process",
+    "tool-header-short": "style", "tool-options-shape": "style", "tool-recommended-first": "style", "tool-skip-last": "style",
+    "tool-question-shape": "style", "tool-no-extra-text": "style",
 }
 
 
@@ -50,7 +65,20 @@ class Case:
 
     @classmethod
     def build(cls, row, events, skill="oaat"):
-        return cls(row, events, skill, pending_titles(row.prompt), trace.final_reply(events), trace.earlier_reply(events) or row.prompt)
+        earlier, _ = ask_tool.split(events)
+        # an earlier turn that presented its item with the tool holds the header in the question text: add it to the history
+        past = "\n".join(filter(None, [trace.earlier_reply(events), *ask_tool.question_texts(ask_tool.last_turn(earlier))]))
+        return cls(row, events, skill, pending_titles(row.prompt), trace.final_reply(events), past or row.prompt)
+
+    @property
+    def turn(self):
+        """The events of the last turn (the turn that is graded)."""
+        return ask_tool.last_turn(self.events)
+
+    @property
+    def tool_path(self):
+        """True when the item of this turn is presented with AskUserQuestion: the text-template checks then do not apply."""
+        return self.row.expect in ("item", "skip") and bool(ask_tool.ask_calls(self.turn))
 
 
 def plain(line):
@@ -104,7 +132,8 @@ def check_completed(case):
     result = trace.result_event(case.events)
     if result is None:
         return ("completed", False, "no result event: the run did not finish")
-    ok = result.get("subtype") == "success" and result.get("is_error") is False and bool(case.reply.strip())
+    # on the tool path the item is in the tool call, so a turn with no text at all (no count line) is still a reply
+    ok = result.get("subtype") == "success" and result.get("is_error") is False and (bool(case.reply.strip()) or case.tool_path)
     return ("completed", ok, f"result subtype {result.get('subtype')}, is_error {result.get('is_error')}, reply {len(case.reply.split())} words")
 
 
@@ -294,7 +323,103 @@ def check_turns(case):
     return ("turns-bound", turns <= MAX_TURNS, f"num_turns {turns} (max {MAX_TURNS})")
 
 
-COMMON = (check_skill_loaded, check_skill_trigger, check_completed, check_detours, check_turns)
+def check_no_tool_search(case):
+    """Process check, for BOTH paths. Headless runs have no AskUserQuestion tool (measured), so a search for it is a wasted call."""
+    found = ask_tool.searched_for_tool(case.events)
+    return ("no-tool-search", not found, f"ToolSearch calls that mention AskUserQuestion: {len(found)}; expected 0 (the skill says do not search for it)")
+
+
+def tool_item(case):
+    """(the AskUserQuestion calls of the turn, the first question of the first call or {})."""
+    return ask_tool.ask_calls(case.turn), ask_tool.first_question(case.turn)
+
+
+def check_tool_one_call_one_question(case):
+    calls, _ = tool_item(case)
+    asked = len(ask_tool.questions(calls[0])) if calls else 0
+    ok = len(calls) == 1 and asked == 1
+    return ("tool-one-call-one-question", ok, f"AskUserQuestion calls in the turn: {len(calls)}; questions in the first call: {asked}; expected 1 and 1")
+
+
+def check_tool_header_short(case):
+    header = tool_item(case)[1].get("header")
+    if not isinstance(header, str) or not header.strip():
+        return ("tool-header-short", False, "the question has no header, or it is empty")
+    return ("tool-header-short", len(header) <= MAX_TOOL_HEADER, f"header {header!r}: {len(header)} characters (max {MAX_TOOL_HEADER})")
+
+
+def check_tool_options_shape(case):
+    question = tool_item(case)[1]
+    options = question.get("options")
+    if not isinstance(options, list):
+        return ("tool-options-shape", False, "the question has no options list")
+    bad = [i for i, o in enumerate(options, 1)
+           if not (isinstance(o, dict) and all(isinstance(o.get(k), str) and o[k].strip() for k in ("label", "description")))]
+    multi = question.get("multiSelect", False)
+    ok = MIN_TOOL_OPTIONS <= len(options) <= MAX_TOOL_OPTIONS and not bad and multi is False
+    return ("tool-options-shape", ok, f"options: {len(options)} (allowed {MIN_TOOL_OPTIONS} to {MAX_TOOL_OPTIONS}); without label and description: "
+                                       f"{bad or 'none'}; multiSelect {multi!r} (must be false or absent)")
+
+
+def option_labels(question):
+    options = question.get("options")
+    return [o["label"] for o in options if isinstance(o, dict) and isinstance(o.get("label"), str)] if isinstance(options, list) else []
+
+
+def check_tool_recommended_first(case):
+    labels = option_labels(tool_item(case)[1])
+    if not labels:
+        return ("tool-recommended-first", False, "the question has no option labels")
+    marked = [i for i, label in enumerate(labels, 1) if label.rstrip().endswith(RECOMMENDED_SUFFIX)]
+    return ("tool-recommended-first", marked == [1], f"options whose label ends with {RECOMMENDED_SUFFIX}: {marked or 'none'}; expected only option 1")
+
+
+def check_tool_skip_last(case):
+    labels = option_labels(tool_item(case)[1])
+    last = labels[-1] if labels else None
+    return ("tool-skip-last", last == SKIP_LABEL, f"last option label: {last!r}; expected {SKIP_LABEL!r}")
+
+
+TOOL_QUESTION_RE = re.compile(r"\s*Item\s+(\d+)\s+of\s+(\d+),\s*([^:?\n]+?):\s*([^?\n]+?)\.(?:\s|$)", re.IGNORECASE)
+
+
+def check_tool_question_shape(case):
+    text = ask_tool.question_text(tool_item(case)[1])
+    match = TOOL_QUESTION_RE.match(text)
+    marks = text.count("?")
+    if not match:
+        return ("tool-question-shape", False, f"the question does not start with 'Item N of M, type: Title.' ({text[:50]!r}); question marks: {marks}")
+    return ("tool-question-shape", marks == 1, f"starts with Item {match.group(1)} of {match.group(2)}, type {match.group(3)!r}, title {match.group(4)!r}; "
+                                              f"question marks: {marks}; expected exactly 1")
+
+
+def check_tool_no_extra_text(case):
+    """Outside the call the agent may print the one-line count before the first item, and nothing else."""
+    text = ask_tool.text_outside(case.turn)
+    lines = [line for line in text.splitlines() if line.strip()]
+    words = len(text.split())
+    problems = []
+    if len(lines) > 1:
+        problems.append(f"{len(lines)} lines")
+    if words > MAX_COUNT_LINE_WORDS:
+        problems.append(f"{words} words (max {MAX_COUNT_LINE_WORDS})")
+    if any(BULLET_RE.match(line) for line in lines):
+        problems.append("a numbered or bulleted line")
+    if headers(text):
+        problems.append("an 'Item N of M' header")
+    if any(label_of(line) for line in lines):
+        problems.append("a template label")
+    return ("tool-no-extra-text", not problems, f"text outside the tool call: {len(lines)} line(s), {words} words; " + (", ".join(problems) or "only a count line, or nothing"))
+
+
+def on_question(check):
+    """The outcome check `check`, run on the text of the tool question instead of the reply (the item is in the tool input)."""
+    def run(case):
+        return check(replace(case, reply=ask_tool.question_text(tool_item(case)[1])))
+    return run
+
+
+COMMON = (check_skill_loaded, check_skill_trigger, check_completed, check_detours, check_turns, check_no_tool_search)
 BY_EXPECT = {
     "item": (check_one_header, check_header_number, check_header_total, check_sections, check_options, check_options_numbered, check_recommended,
              check_one_question, check_no_other_items, check_no_preview, check_length),
@@ -304,8 +429,16 @@ BY_EXPECT = {
     "none": (check_no_header,),
 }
 BY_EXPECT["skip"] = BY_EXPECT["item"]
+TOOL_CHECKS = (check_tool_one_call_one_question, check_tool_header_short, check_tool_options_shape, check_tool_recommended_first,
+               check_tool_skip_last, check_tool_question_shape, check_tool_no_extra_text)
+# On the tool path the text-template style checks (one-header, sections, options-*, recommended-marked, one-question, length-bound)
+# do not apply. The outcome checks that read the item header and titles still apply, on the text of the question.
+TOOL_ITEM = tuple(on_question(c) for c in (check_header_number, check_header_total, check_no_other_items, check_no_preview)) + TOOL_CHECKS
 
 
 def run_checks(case):
-    """Every check that applies to the case, as [(id, passed, note)]."""
-    return [check(case) for check in COMMON + BY_EXPECT[case.row.expect]]
+    """Every check that applies to the case, as [(id, passed, note)].
+
+    A turn that calls AskUserQuestion for an item (expect item or skip) is graded on the tool path; every other turn on the text path.
+    """
+    return [check(case) for check in COMMON + (TOOL_ITEM if case.tool_path else BY_EXPECT[case.row.expect])]
