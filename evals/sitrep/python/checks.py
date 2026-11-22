@@ -7,7 +7,7 @@ shows only the main conversation. Groups:
     precondition  was the behaviour exercised at all? A failure makes the trial INCONCLUSIVE, not FAIL (see `verdict`): the run did
                   not finish (`run-completed`), the workspace snapshots were not recorded (`state-recorded`: a case never recorded, a
                   trace without its .state.json), a report.sh that was tried left no report directory, or a permission denial
-                  blocked report.sh or data.js, or turn 1 had a denied Bash call of any kind and never tried `report.sh new` (the harness's
+                  blocked report.sh or data.js and no later successful call of the same effect redid it, or turn 1 had a denied Bash call of any kind and never tried `report.sh new` (the harness's
                   own grants denied the agent's exploration), which says nothing about the skill (a plugin that did not load, or not the
                   one under test, `skill-loaded`, is treated the same way)
     process       did the skill load and trigger, and was the report made and removed by report.sh, not by hand?
@@ -27,6 +27,7 @@ Which checks apply to a row depends on its `expect` column (see BY_EXPECT).
 import json
 import os
 import re
+from collections import namedtuple
 from types import SimpleNamespace
 from dataclasses import dataclass, field
 
@@ -416,28 +417,126 @@ def unexercised_denials(case):
     return [] if _ran_new(case) else denied_bash(case.turns[0])
 
 
+Call = namedtuple("Call", "turn id name input text ok")
+
+
+def call_log(case):
+    """[Call] of every tool call of the main conversation, in order, over all turns. `text` is the tool_result ('' when it has none),
+    `ok` is True when the call completed: it has a tool_result, that result does not say is_error: true and does not read like a refusal."""
+    results, errored = hook_trace.tool_results(case.events), hook_trace.errored_results(case.events)
+    return [Call(n, call_id, name, tool_input, results.get(call_id, ""),
+                 call_id in results and call_id not in errored and not _reads_as_refusal(name, results[call_id]))
+            for n, turn in enumerate(case.turns, start=1) for call_id, name, tool_input in hook_trace.tool_uses(turn)]
+
+
+def effects(name, tool_input):
+    """What a call of tool `name` does that a denial leaves undone: "script:new" / "script:clean" (a Bash call of that report.sh verb, any
+    spelling of the path: quoted, absolute, through a variable) and "data:<path>" (a Write or Edit of that data.js)."""
+    found = set()
+    if name == "Bash":
+        found |= {f"script:{verb}" for _, verb, _ in _verb_calls(str(tool_input.get("command", "")), "new", "clean")}
+    path = str(tool_input.get("file_path", "")).strip()
+    if name in ("Write", "Edit") and DATA_JS_PATH_RE.search(path):
+        found.add(f"data:{os.path.normpath(path)}")
+    return found
+
+
+def _denial_effects(denial, call):
+    """The effects of one permission_denials element. A denial that names its tool and input is read from them; one with only a
+    tool_use_id (a system permission_denied event) from the call it names (`call`, or None); otherwise every string in it is read as a
+    command (a report.sh call) or as a bare path (a data.js), like denial_kinds."""
+    name, tool_input = denial.get("tool_name", ""), denial.get("tool_input")
+    if name in GUARDED_TOOLS and isinstance(tool_input, dict):
+        return effects(name, tool_input)
+    if call is not None and call.name in GUARDED_TOOLS and name in ("",) + GUARDED_TOOLS:
+        return effects(call.name, call.input)
+    if name not in ("",) + GUARDED_TOOLS:
+        return set()
+    strings = _strings(denial)
+    return ({"script:new"} if any(state.REPORT_NEW_RE.search(t) for t in strings) else set()) | ({"script:clean"} if any(state.REPORT_CLEAN_RE.search(t) for t in strings) else set()) \
+        | {f"data:{os.path.normpath(t.strip())}" for t in strings if DATA_JS_ALONE_RE.fullmatch(t.strip())}
+
+
+def _locate(log, denial, turn):
+    """The index in `log` of the call a denial element without a usable tool_use_id is about: a call of the same tool in the same turn with
+    the same command (Bash) or file_path (Write, Edit). Among several the one that did not complete, else the first. None when the element
+    names no tool and input: it cannot be placed, so no later call can answer it."""
+    name, tool_input = denial.get("tool_name"), denial.get("tool_input")
+    if name not in GUARDED_TOOLS or not isinstance(tool_input, dict):
+        return None
+    key = "command" if name == "Bash" else "file_path"
+    found = [i for i, c in enumerate(log) if c.turn == turn and c.name == name and str(c.input.get(key, "")).strip() == str(tool_input.get(key, "")).strip()]
+    return next((i for i in found if not log[i].ok), found[0] if found else None)
+
+
+def denials(case):
+    """[(turn, index in call_log or None, effects, description)] of every denial of report.sh `new` or `clean` or of a Write or Edit of
+    a data.js, whichever channel reported it: an element of a result event's permission_denials or a system permission_denied event, or
+    the tool_result of such a call when it reads like a refusal. The same call seen through two channels is listed twice (both are
+    cleared, or not, together)."""
+    log = call_log(case)
+    ids = [c.id for c in log]
+    found = []
+    for n, turn in enumerate(case.turns, start=1):
+        for d in hook_trace.permission_denials(turn):
+            call_id = str(d.get("tool_use_id") or "")
+            at = ids.index(call_id) if call_id in ids else _locate(log, d, n)
+            kinds = _denial_effects(d, log[at] if at is not None else None)
+            if kinds:
+                found.append((n, at, kinds, json.dumps(d)[:80]))
+    for at, c in enumerate(log):
+        if effects(c.name, c.input) and _reads_as_refusal(c.name, c.text):
+            found.append((c.turn, at, effects(c.name, c.input), f"{c.name}: {c.text.strip()[:70]!r}"))
+    return found, log
+
+
+def redone(log, at, kinds):
+    """True when every effect of the denied call `log[at]` happened anyway in a LATER call that completed (see call_log): `report.sh new`
+    denied as part of an exploration line and then run on its own, a data.js write denied and then written again. Same effect, not same
+    text. A denial that cannot be placed in the log (at is None) is never redone: nothing says what came after it."""
+    if at is None:
+        return False
+    return kinds <= {e for c in log[at + 1:] if c.ok for e in effects(c.name, c.input)}
+
+
+def unredone_denials(case):
+    """[(turn, description)] of the denials (see denials) that no later successful call answered (see redone), and the number that was."""
+    found, log = denials(case)
+    open_ = [(n, label) for n, at, kinds, label in found if not redone(log, at, kinds)]
+    return open_, len(found) - len(open_)
+
+
 def blocked_turns(case):
-    """The turns (1, 2) in which report.sh or a data.js write was denied, by a recorded denial or by a refusal read from a tool_result;
-    turn 1 also when a Bash call was denied there and `report.sh new` was never tried (unexercised_denials)."""
-    return {n for n, turn in enumerate(case.turns, start=1)
-            if any(denial_kinds(d) for d in hook_trace.permission_denials(turn)) or _refusals_in(turn) or (n == 1 and unexercised_denials(case))}
+    """The turns (1, 2) in which report.sh or a data.js write was denied and not redone by a later successful call, by a recorded denial
+    or by a refusal read from a tool_result; turn 1 also when a Bash call was denied there and `report.sh new` was never tried (unexercised_denials)."""
+    return {n for n, _ in unredone_denials(case)[0]} | ({1} if unexercised_denials(case) else set())
 
 
 def not_permission_blocked(case):
-    """A denial of `report.sh new` or `clean` or of a Write or Edit of a data.js; denials of open/xdg-open/start are expected (they are
-    not granted), and so is a denial of any other command that only names data.js (`node --check .../data.js`): the skill is not at fault.
+    """A denial of `report.sh new` or `clean` or of a Write or Edit of a data.js that no later call redid successfully; denials of
+    open/xdg-open/start are expected (they are not granted), and so is a denial of any other command that only names data.js
+    (`node --check .../data.js`): the skill is not at fault.
+
+    A denial is cleared when a LATER call of the same effect completed (a tool_result without is_error that does not read like a
+    refusal): for report.sh, a Bash call that runs the same verb (`report.sh new`, any spelling of the path); for data.js, a Write or Edit
+    of the same path. The known case: the agent chains `S=...; "$S/scripts/report.sh" new; cat ...; git log | head` into one call; a
+    shell-variable call that no permission pattern can grant under the harness' permission mode is denied as a whole, and the agent then
+    runs `"/abs/.../report.sh" new` on its own, which succeeds. A denial with no successful redo, or whose redo came back as an error,
+    stays blocked (the trial is INCONCLUSIVE); so does one that cannot be placed in the trace.
+
     Also failed (the trial is INCONCLUSIVE) when turn 1 had a denied Bash call of any kind and never tried `report.sh new`: a compound
-    exploration command denied for one ungranted part ends the agent's work before the skill's own step, so nothing was measured.
+    exploration command denied for one ungranted part ends the agent's work before the skill's own step, so nothing was measured
+    (a `new` that was tried, even denied, ends that rule; the denial itself is judged above).
 
     Read from result.permission_denials, from system permission_denied events and from tool_results of such calls that read like a
     refusal (neither channel is confirmed to carry the denial: README item 1; the dontAsk denial text and both events are seen in a
     real trace, Claude Code 2.1.330)."""
-    denials = [d for turn in case.turns for d in hook_trace.permission_denials(turn)]
-    blocked = [d for d in denials if denial_kinds(d)]
-    refused = _refusals(case)
+    all_denials = [d for turn in case.turns for d in hook_trace.permission_denials(turn)]
+    blocked, cleared = unredone_denials(case)
     stopped = unexercised_denials(case)
-    return "not-permission-blocked", not blocked and not refused and not stopped, \
-        f"permission denials: {len(denials)}; of report.sh or a data.js write: {len(blocked)} {[json.dumps(d)[:80] for d in blocked]}; tool results that read as a refusal: {refused or 'none'}; " \
+    return "not-permission-blocked", not blocked and not stopped, \
+        f"permission denials: {len(all_denials)}; of report.sh or a data.js write: {len(blocked) + cleared}, never redone by a later successful call: {len(blocked)} {[label for _, label in blocked] or 'none'}" \
+        + (f"; redone by a later successful call (not blocking): {cleared}" if cleared else "") + "; " \
         + (f"turn 1 had denied Bash calls and never tried report.sh new, so the behaviour under test was not exercised: {[c[:80] or '(command unknown)' for _, c in stopped]}" if stopped
            else "no denied Bash call kept turn 1 from trying report.sh new")
 

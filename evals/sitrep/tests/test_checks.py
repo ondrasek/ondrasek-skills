@@ -137,6 +137,13 @@ DONTASK = ("Permission to use Bash has been denied because Claude Code is runnin
 STOPPED_CALLS = [("Skill", {"skill": SKILL}), ("Bash", {"command": EXPLORE}, DONTASK), ("Read", {"file_path": "/r/ws/.cache/milestones.json"})]
 STOPPED = dict(calls1=STOPPED_CALLS, report_found=False, tmp_sitrep=[])
 EXPLORE_DENIAL = [{"tool_name": "Bash", "tool_use_id": "toolu_x", "tool_input": {"command": EXPLORE}}]
+# The real discover-open-items shape (invented text): ONE compound command through a shell variable, which no permission pattern can
+# grant under the harness' permission mode, denied as a whole; then the literal-path `report.sh new` succeeded and the report was built
+VAR_COMPOUND = (f'S="{PLUGIN}/skills/sitrep"; "$S/scripts/report.sh" new; echo ---; cat "$S/schema.md"; echo ---; ls -la; ls docs .cache 2>/dev/null; git log --oneline | head')
+DENIED_VAR = ("Bash", {"command": VAR_COMPOUND}, DONTASK, True)
+WRITE_DATA = ("Write", {"file_path": DIR + "/data.js", "content": "..."}, "File created successfully at: " + DIR + "/data.js")
+OPEN_DENIED = ("Bash", {"command": f'open "{DIR}/index.html"'}, DONTASK, True)
+RETRIED = [("Skill", {"skill": SKILL}), DENIED_VAR, ("Bash", {"command": NEW}, DIR + "\n"), WRITE_DATA, OPEN_DENIED]
 # everything that reads the report or the milestone mapping fails with it (report.sh never ran, so there is no report)
 STOPPED_CASCADE = NO_REPORT | {"milestone-item", "milestone-strip", "milestone-current"}
 # (label, check id, expect, override, cascade): further failing runs of a check, the reviewer's and the ones a check was fixed for
@@ -176,6 +183,10 @@ MORE_MUTATIONS = [
     ("a compound exploration command denied (dontAsk text in the tool_result) and report.sh new never tried", "not-permission-blocked", "report-ms", STOPPED, STOPPED_CASCADE),
     ("the same denial recorded only in result.permission_denials, with a command that reads as a success", "not-permission-blocked", "report-ms",
      dict(calls1=[("Skill", {"skill": SKILL}), ("Bash", {"command": EXPLORE}, "")], denials=EXPLORE_DENIAL, report_found=False, tmp_sitrep=[]), STOPPED_CASCADE),
+    ("a denied report.sh new through a shell variable and no later report.sh new", "not-permission-blocked", "report",
+     dict(calls1=[("Skill", {"skill": SKILL}), DENIED_VAR, WRITE_DATA]), set()),
+    ("a denied report.sh new through a shell variable, retried, but the retry came back as an error", "not-permission-blocked", "report",
+     dict(calls1=[("Skill", {"skill": SKILL}), DENIED_VAR, ("Bash", {"command": NEW}, "mktemp: cannot create the directory\n", True), WRITE_DATA]), set()),
     ("report.sh run from outside the plugin under test", "skill-loaded", "report",
      dict(calls1=[("Skill", {"skill": SKILL}), ("Bash", {"command": '"/installed/sitrep/skills/sitrep/scripts/report.sh" new'}, DIR + "\n"), REPORT_CALLS[2]]), set()),
 ]
@@ -593,6 +604,101 @@ class DeniedExploration(unittest.TestCase):
         # turn 1 made the report; an unrelated Bash denial in the cleanup turn is not an exploration stop (turn 1 ran new)
         calls2 = [("Bash", {"command": "git log | head"}, DONTASK)] + CLEAN_CALLS
         self.assertEqual(judge("report-clean", calls2=calls2), "PASS")
+
+
+class RedoneDenials(unittest.TestCase):
+    """A denied call that mentions report.sh or writes data.js is cleared by a LATER call of the same effect that completed (a
+    tool_result without is_error). The real shape: a shell-variable compound denied, then `report.sh new` by its literal path succeeded."""
+
+    def case(self, calls1, channel="result", **override):
+        row, events, states = helpers.good("report", calls1=calls1, **override)
+        uses = checks.hook_trace.tool_uses(events)
+        denied = next(i for i, name, tool_input in uses if name == "Bash" and tool_input.get("command") == VAR_COMPOUND) if channel != "result" else None
+        if channel == "permission_denials":
+            events[-1]["permission_denials"] = [{"tool_name": "Bash", "tool_use_id": denied, "tool_input": {"command": VAR_COMPOUND}}]
+        if channel == "system event":      # the real one has tool_name and tool_use_id, no tool_input
+            events.insert(-1, {"type": "system", "subtype": "permission_denied", "tool_name": "Bash", "tool_use_id": denied, "message": DONTASK})
+        return checks.Case.build(row, events, states)
+
+    def ok(self, case):
+        return {c: ok for c, ok, _ in checks.run_checks(case)}["not-permission-blocked"]
+
+    def test_the_real_shape_is_not_inconclusive_in_any_channel(self):
+        for channel in ("result", "permission_denials", "system event"):
+            with self.subTest(channel=channel):
+                case = self.case(RETRIED, channel)
+                self.assertTrue(self.ok(case))
+                self.assertEqual(judge_case(case), "PASS")
+        note = next(n for cid, _, n in checks.run_checks(self.case(RETRIED)) if cid == "not-permission-blocked")
+        self.assertIn("redone by a later successful call", note)
+
+    def test_the_variable_form_of_the_retry_or_a_quoted_path_clears_it_too(self):
+        for command in (f'"{SCRIPT}" new', f"{SCRIPT} new", f'S="{PLUGIN}/skills/sitrep"; "$S/scripts/report.sh" new', f'cd /r/ws && "{SCRIPT}" new 2>&1'):
+            with self.subTest(command=command):
+                calls = [("Skill", {"skill": SKILL}), DENIED_VAR, ("Bash", {"command": command}, DIR + "\n"), WRITE_DATA]
+                self.assertTrue(self.ok(self.case(calls)))
+
+    def test_a_denial_that_was_never_redone_stays_inconclusive(self):
+        calls = [("Skill", {"skill": SKILL}), DENIED_VAR, WRITE_DATA]
+        for channel in ("result", "permission_denials", "system event"):
+            with self.subTest(channel=channel):
+                case = self.case(calls, channel)
+                self.assertFalse(self.ok(case))
+                self.assertEqual(judge_case(case), "INCONCLUSIVE")
+        # nothing was made at all
+        case = self.case([("Skill", {"skill": SKILL}), DENIED_VAR], report_found=False, tmp_sitrep=[])
+        self.assertEqual(judge_case(case), "INCONCLUSIVE")
+
+    def test_a_retry_that_came_back_as_an_error_does_not_clear_it(self):
+        for output, is_error in (("mktemp: cannot create the directory\n", True), (DONTASK, True), (DONTASK, None)):
+            with self.subTest(output=output[:20], is_error=is_error):
+                calls = [("Skill", {"skill": SKILL}), DENIED_VAR, ("Bash", {"command": NEW}, output, is_error), WRITE_DATA]
+                case = self.case(calls)
+                self.assertFalse(self.ok(case))
+                self.assertEqual(judge_case(case), "INCONCLUSIVE")
+
+    def test_a_retry_with_no_result_does_not_clear_it(self):
+        self.assertFalse(self.ok(self.case([("Skill", {"skill": SKILL}), DENIED_VAR, ("Bash", {"command": NEW}), WRITE_DATA])))
+
+    def test_a_successful_call_of_a_different_effect_does_not_clear_it(self):
+        other = ("Bash", {"command": "ls -la"}, "total 0\n")
+        for label, later in (("another command", other), ("a clean, not a new", ("Bash", {"command": CLEAN}, f"deleted {DIR}\n")),
+                             ("a write of data.js", WRITE_DATA), ("a command that only names report.sh", ("Bash", {"command": f"cat {SCRIPT}"}, "#!/bin/sh\n"))):
+            with self.subTest(later=label):
+                self.assertFalse(self.ok(self.case([("Skill", {"skill": SKILL}), DENIED_VAR, later])))
+
+    def test_a_successful_new_before_the_denial_does_not_clear_it(self):
+        calls = [("Skill", {"skill": SKILL}), ("Bash", {"command": NEW}, DIR + "\n"), DENIED_VAR, WRITE_DATA]
+        self.assertFalse(self.ok(self.case(calls)))
+
+    def test_a_denied_write_of_data_js_is_cleared_by_a_later_successful_write_or_edit_of_the_same_path(self):
+        denied = ("Write", {"file_path": DIR + "/data.js", "content": "..."}, "Permission to use Write has been denied.", True)
+        edit = ("Edit", {"file_path": DIR + "/data.js", "old_string": "a", "new_string": "b"}, "The file " + DIR + "/data.js has been updated.")
+        for label, later, cleared in (("a write", WRITE_DATA, True), ("an edit", edit, True),
+                                      ("a write of another file", ("Write", {"file_path": DIR + "/notes.txt", "content": "x"}, "File created successfully"), False),
+                                      ("a write of another data.js", ("Write", {"file_path": "/r/tmp/sitrep.Other/data.js", "content": "x"}, "File created successfully"), False),
+                                      ("a write that failed", ("Write", {"file_path": DIR + "/data.js", "content": "x"}, "disk full", True), False),
+                                      ("a write that was refused again", ("Write", {"file_path": DIR + "/data.js", "content": "x"}, "Permission to use Write has been denied.", True), False),
+                                      ("a bash that names data.js", ("Bash", {"command": f"node --check {DIR}/data.js"}, ""), False)):
+            with self.subTest(later=label):
+                self.assertEqual(self.ok(self.case(REPORT_CALLS[:2] + [denied, later])), cleared)
+
+    def test_a_recorded_denial_of_an_unplaceable_shape_is_never_cleared(self):
+        # no tool_use_id, no tool_name: nothing says which call it was, so a later success cannot answer it
+        row, events, states = helpers.good("report", calls1=RETRIED, denials=[{"detail": f"denied {NEW}"}])
+        self.assertFalse(self.ok(checks.Case.build(row, events, states)))
+
+    def test_a_recorded_denial_with_a_command_is_placed_by_it_when_it_has_no_tool_use_id(self):
+        denial = {"tool_name": "Bash", "tool_input": {"command": VAR_COMPOUND}}
+        row, events, states = helpers.good("report", calls1=RETRIED, denials=[denial])
+        self.assertTrue(self.ok(checks.Case.build(row, events, states)))
+        row, events, states = helpers.good("report", calls1=[("Skill", {"skill": SKILL}), DENIED_VAR, WRITE_DATA], denials=[denial])
+        self.assertFalse(self.ok(checks.Case.build(row, events, states)))
+
+    def test_the_old_rule_for_an_exploration_that_never_tried_new_still_holds(self):
+        # a denied unrelated call and no report.sh new anywhere: INCONCLUSIVE; with a successful new it is cleared as before
+        self.assertEqual(judge("report", **STOPPED), "INCONCLUSIVE")
+        self.assertEqual(judge("report", calls1=[REPORT_CALLS[0], ("Bash", {"command": EXPLORE}, DONTASK, True)] + REPORT_CALLS[1:]), "PASS")
 
 
 class Gates(unittest.TestCase):

@@ -65,18 +65,22 @@ def init(plugins=("sitrep",), skills=(SKILL,), session="stub-session", path=PLUG
             "plugins": [{"name": n, "path": path, "source": f"{n}@inline"} for n in plugins] + [{"name": "cc-plugin-x", "path": "builtin", "source": "cc-plugin-x@builtin"}]}
 
 
-def tool_events(name, tool_input, output=None, mid=None):
-    """The assistant tool_use event of a call and, when it has an output, the user event holding its tool_result."""
+def tool_events(name, tool_input, output=None, is_error=None, mid=None):
+    """The assistant tool_use event of a call and, when it has an output, the user event holding its tool_result (with is_error when given:
+    a real denial or a failed call says is_error: true, a success has no such field or false)."""
     call_id = f"toolu_{next(_ids)}"
-    block = {"type": "tool_use", "id": call_id, "name": name, "input": tool_input}
-    events = [{"type": "assistant", "parent_tool_use_id": None, "message": {"id": mid or f"m{next(_ids)}", "content": [block]}}]
+    use = {"type": "tool_use", "id": call_id, "name": name, "input": tool_input}
+    events = [{"type": "assistant", "parent_tool_use_id": None, "message": {"id": mid or f"m{next(_ids)}", "content": [use]}}]
     if output is not None:
-        events.append({"type": "user", "parent_tool_use_id": None, "message": {"content": [{"type": "tool_result", "tool_use_id": call_id, "content": output}]}})
+        block = {"type": "tool_result", "tool_use_id": call_id, "content": output}
+        if is_error is not None:
+            block["is_error"] = is_error
+        events.append({"type": "user", "parent_tool_use_id": None, "message": {"content": [block]}})
     return events
 
 
 def calls(entries):
-    """Events of [(name, input) or (name, input, output)]."""
+    """Events of [(name, input), (name, input, output) or (name, input, output, is_error)]."""
     return [e for entry in entries for e in tool_events(*entry)]
 
 

@@ -61,6 +61,12 @@ def tool_results(events, unless_ok=False):
     return results
 
 
+def errored_results(events):
+    """{tool_use_id} of the tool_result blocks that say is_error: true (a real denial or a failed call; an absent field is not an error)."""
+    return {block["tool_use_id"] for event in events if event.get("type") == "user" for block in trace.blocks(event)
+            if block.get("type") == "tool_result" and isinstance(block.get("tool_use_id"), str) and block.get("is_error")}
+
+
 def tool_uses(events):
     """[(tool_use_id, name, input dict)] of every tool_use block of the main conversation, in order."""
     found = []
