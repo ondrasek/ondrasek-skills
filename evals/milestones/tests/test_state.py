@@ -65,6 +65,8 @@ class Fixtures(unittest.TestCase):
         for base, dirs, names in os.walk(UNIT):
             dirs[:] = [d for d in dirs if d not in ("__pycache__", "artifacts")]
             found += [os.path.join(base, n) for n in dirs + names if n in FORBIDDEN]
+        # Claude Code makes an empty .claude/.cc-writes marker directory in the directory a session works in: no file, nothing to load
+        found = [p for p in found if not (os.path.basename(p) == ".claude" and not any(files for _, _, files in os.walk(p)))]
         self.assertEqual(found, [])
 
 

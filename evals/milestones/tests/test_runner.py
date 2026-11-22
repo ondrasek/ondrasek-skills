@@ -267,7 +267,9 @@ class Grading(unittest.TestCase):
         self.assertEqual(tokens[tokens.index("--max-budget-usd") + 1], "2")
         self.assertLess(tokens.index("{prompt}"), tokens.index("--allowedTools"))
         allowed = tokens[tokens.index("--allowedTools") + 1]
-        for grant in ("Skill", "Read", "Edit", "Write", "Bash(python3 *milestones.py *)"):
+        # both spellings: the skill calls the script with a quoted absolute path, so the closing quote comes before the verb
+        # (the first real run was denied under the unquoted pattern alone)
+        for grant in ("Skill", "Read", "Edit", "Write", "Bash(python3 *milestones.py *)", 'Bash(python3 *milestones.py" *)'):
             self.assertIn(grant, allowed.split(","))
         # --allowedTools takes a list: the next token must be a flag, or it would swallow the appended --plugin-dir
         self.assertTrue(tokens[tokens.index("--allowedTools") + 2].startswith("--"))

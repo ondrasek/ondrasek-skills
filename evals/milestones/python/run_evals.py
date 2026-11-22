@@ -19,6 +19,7 @@ The exit code is 0 when every trial passes (with or without warnings), 1 when a 
 """
 import argparse
 import json
+import shlex
 import shutil
 import sys
 import tempfile
@@ -36,10 +37,11 @@ REPO = UNIT.parents[1]
 PLUGIN = REPO / "plugins" / "milestones"
 GROUP_ORDER = ("precondition", "process", "gate", "outcome", "soft")
 # Read-only tools, the script, and Edit/Write plus git add/commit: those four are granted on purpose, so that a direct tracker write or a
-# commit of the tracker can happen and be measured. Whether this pattern matches the quoted absolute script path is unconfirmed;
-# a denial is reported as INCONCLUSIVE (not-permission-blocked).
-ALLOWED = ("Skill,Read,Glob,Grep,Edit,Write,Bash(python3 *milestones.py *),Bash(ls *),Bash(cat *),Bash(git status *),"
-           "Bash(git add *),Bash(git commit *)")
+# commit of the tracker can happen and be measured. The script is granted in the two spellings SKILL.md gives it: the skill calls it with a
+# quoted absolute path, so the closing quote comes before the verb and the unquoted pattern alone does not match (observed in the first
+# real run: dontAsk denied the call). A denial is still reported as INCONCLUSIVE (not-permission-blocked).
+ALLOWED = ("Skill,Read,Glob,Grep,Edit,Write,Bash(python3 *milestones.py *),Bash(python3 *milestones.py\" *),Bash(ls *),Bash(cat *),"
+           "Bash(git status *),Bash(git add *),Bash(git commit *)")
 # `env -u` because runner_cmd.run merges os.environ and cannot unset: an inherited CLAUDE_PROJECT_DIR would point the Stop hook and
 # milestones.py at the repository this harness was started from, and an inherited GIT_DIR (the harness started from a git hook) would
 # point the agent's git at it. `project,local` keeps user settings, hooks and plugins out (unconfirmed for hooks); never --bare, which
@@ -47,7 +49,7 @@ ALLOWED = ("Skill,Read,Glob,Grep,Edit,Write,Bash(python3 *milestones.py *),Bash(
 UNSET = ("CLAUDE_PROJECT_DIR", "CLAUDE_HOOK_RUNNING", "MILESTONES_FILE", "MILESTONES_NOW", "MILESTONES_STALE_MINUTES", *state.GIT_UNSET)
 DEFAULT_AGENT_CMD = (f"env {' '.join(f'-u {name}' for name in UNSET)} "
                      f'claude -p {{prompt}} --output-format stream-json --verbose --include-hook-events --permission-mode dontAsk '
-                     f'--max-budget-usd 2 --allowedTools "{ALLOWED}" --setting-sources project,local')
+                     f'--max-budget-usd 2 --allowedTools {shlex.quote(ALLOWED)} --setting-sources project,local')
 
 
 def trace_path(directory, row_id, trial, trials, suffix="jsonl"):
