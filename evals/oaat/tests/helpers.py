@@ -79,7 +79,8 @@ GOOD_ITEM = (
     "**One question:** Which database should the first release use?")
 
 
-# ---- the tool path (AskUserQuestion): INVENTED traces; the tool_result envelope is the assumed one, UNCONFIRMED (README, "The tool path") ----
+# ---- the tool path (AskUserQuestion): INVENTED traces. The text of a tool_result follows the envelope OBSERVED in one interactive session
+# (2026-11-22, one sample, one version: UNCONFIRMED across versions, README "The tool path"); a bare label and a JSON mapping are the others ----
 COUNT_LINE = "5 items need you. First one:"
 CLOSING_LINE = "Noted: Postgres for the first release."
 GOOD_TOOL_INPUT = {"questions": [{
@@ -95,16 +96,41 @@ GOOD_TOOL_INPUT = {"questions": [{
 }]}
 
 
+def wrap_answer(tool_input, answer, envelope="wrapper"):
+    """The content of a tool_result for `answer` (a label, `Skip for now` or free text) to the questions of `tool_input`.
+
+    wrapper (the observed envelope): `Your questions have been answered: "<question>"="<answer>", ... You can now continue with these
+    answers in mind.` with one pair per question; mapping: a JSON object {"answers": {question: answer}}; bare: the answer itself.
+    """
+    if envelope == "bare":
+        return answer
+    questions = tool_input.get("questions") if isinstance(tool_input, dict) else None
+    texts = [q.get("question", "") for q in questions if isinstance(q, dict)] if isinstance(questions, list) else []
+    texts = texts or [""]
+    if envelope == "mapping":
+        return json.dumps({"answers": {text: answer for text in texts}})
+    pairs = ", ".join(f'"{text}"="{answer}"' for text in texts)
+    return f"Your questions have been answered: {pairs}. You can now continue with these answers in mind."
+
+
 class Ask:
     """One AskUserQuestion call in a walk: its input, and what comes back as its tool_result.
 
-    answer: the content of the tool_result (the chosen label, `Skip for now`, or free text); None = no tool_result at all.
-    error: the tool_result carries is_error true (a denied or failed call).
+    answer: what the user answered (the chosen label, `Skip for now`, or free text); None = no tool_result at all. The content of the
+    tool_result is that answer in the observed wrapper envelope (`envelope="bare"` or "mapping" for the other readings).
+    error: the tool_result carries is_error true (a denied or failed call); its content is `answer` as given, unwrapped.
     """
 
-    def __init__(self, tool_input=None, answer="", error=False, tool_id=None):
+    def __init__(self, tool_input=None, answer="", error=False, tool_id=None, envelope="wrapper"):
         self.input = GOOD_TOOL_INPUT if tool_input is None else tool_input
-        self.answer, self.error, self.tool_id = answer, error, tool_id
+        self.answer, self.error, self.tool_id, self.envelope = answer, error, tool_id, envelope
+
+
+class Use:
+    """One call of another tool in a walk (a Skill, Bash or Read call, for example), answered by a tool_result `result`."""
+
+    def __init__(self, name, tool_input=None, result="ok"):
+        self.name, self.input, self.result = name, {} if tool_input is None else tool_input, result
 
 
 def default_answer(tool_input):
@@ -134,8 +160,9 @@ def make_walk_events(messages, called=("oaat:oaat",), searches=(), others=(), tu
     """The events of ONE INVENTED turn of an interactive walk-through (the same-turn model, README "The tool path").
 
     `messages` is a list of assistant messages; a message is a list of blocks: a str is a text block, an Ask is an AskUserQuestion
-    tool_use. After a message, every Ask of it that has an answer is followed by a user event with its tool_result (is_error true when
-    `error`); an Ask with answer None gets no result. The result event repeats the text of the last message (as the real stream does).
+    tool_use, a Use is a call of another tool. After a message, every Ask of it that has an answer is followed by a user event with its
+    tool_result (is_error true when `error`); an Ask with answer None gets no result. The result event repeats the text of the last
+    message (as the real stream does). `others` are calls made before the messages: a tool name, or a (name, input) pair.
     `turns` defaults to the number of assistant messages (the Skill, ToolSearch and other calls included).
     """
     events, count = [init_event(tools)], 0
@@ -146,8 +173,9 @@ def make_walk_events(messages, called=("oaat:oaat",), searches=(), others=(), tu
     for query in searches:
         events.append(assistant(tool_use("toolu_INVENTED_S", "ToolSearch", {"query": query, "max_results": 1})))
         count += 1
-    for name in others:
-        events.append(assistant(tool_use("toolu_INVENTED_O", name, {})))
+    for item in others:
+        name, other_input = item if isinstance(item, tuple) else (item, {})
+        events.append(assistant(tool_use("toolu_INVENTED_O", name, other_input)))
         count += 1
     serial, last_text = 0, ""
     for blocks in messages:
@@ -158,10 +186,16 @@ def make_walk_events(messages, called=("oaat:oaat",), searches=(), others=(), tu
                 serial += 1
                 content.append(tool_use(tool_id, "AskUserQuestion", block.input))
                 if block.answer is not None:
-                    result = {"type": "tool_result", "tool_use_id": tool_id, "content": block.answer}
+                    content_text = block.answer if block.error else wrap_answer(block.input, block.answer, block.envelope)
+                    result = {"type": "tool_result", "tool_use_id": tool_id, "content": content_text}
                     if block.error:
                         result["is_error"] = True
                     results.append(result)
+            elif isinstance(block, Use):
+                serial += 1
+                tool_id = f"toolu_INVENTED_U{serial}"
+                content.append(tool_use(tool_id, block.name, block.input))
+                results.append({"type": "tool_result", "tool_use_id": tool_id, "content": block.result})
             elif block:
                 content.append({"type": "text", "text": block})
                 last_text = block
@@ -176,10 +210,11 @@ def make_walk_events(messages, called=("oaat:oaat",), searches=(), others=(), tu
 
 def make_tool_events(inputs=(GOOD_TOOL_INPUT,), text=COUNT_LINE, closing=CLOSING_LINE, between="", answers=None, errors=False, batched=False, **kwargs):
     """A good one-turn walk of `inputs`: the count line (`text`) and the first call, then for every later call `between` (one plain
-    line) and the call, then a closing plain line. Every call is answered with the label of its first option, unless `answers` says
+    line) and the call, then a closing plain line. Every call but the last is answered with the label of its first option and the last
+    with the free text `stop` (the walk ends there: a label with items left is an early end, `tool-early-end`), unless `answers` says
     otherwise (one entry per call; None = no tool_result). `batched=True` puts every call into ONE assistant message (what the skill
     forbids). `errors=True` makes every tool_result a denial. Other keywords go to make_walk_events."""
-    answers = list(answers) if answers is not None else [default_answer(item) for item in inputs]
+    answers = list(answers) if answers is not None else [default_answer(item) for item in inputs[:-1]] + ["stop"] * bool(inputs)
     asks = [Ask(item, answer, errors) for item, answer in zip(inputs, answers)]
     if batched:
         messages = [[text, *asks, closing]]

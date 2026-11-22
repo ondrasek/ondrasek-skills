@@ -185,7 +185,7 @@ class OtherExpectChecks(unittest.TestCase):
         self.assertFalse(passes(case_for(STOP, self.WRAPUP + "\n**Item 4 of 5, question**"), "no-oaat-header"))
 
     def test_tangent_flag(self):
-        good = "This may be a tangent from the database decision. Continue or refocus?"
+        good = "This may be a tangent from Pick the database. Continue or refocus?"
         self.assertTrue(passes(case_for(TANGENT, good), "tangent-flag"))
         self.assertFalse(passes(case_for(TANGENT, "Podman is nice. Back to the database?"), "tangent-flag"))
         self.assertFalse(passes(case_for(TANGENT, "This may be a tangent. Continue or refocus?"), "tangent-flag"))
@@ -212,7 +212,7 @@ class OtherExpectChecks(unittest.TestCase):
         self.assertFalse(passes(case_for(STOP, wrapup), "no-oaat-header"))
 
     def test_a_tangent_reply_asks_one_question(self):
-        good = "This may be a tangent from the database decision. Continue or refocus?"
+        good = "This may be a tangent from Pick the database. Continue or refocus?"
         self.assertTrue(passes(case_for(TANGENT, good), "one-question"))
         self.assertFalse(passes(case_for(TANGENT, good + " Which runtime?"), "one-question"))
 
@@ -231,7 +231,7 @@ class RunChecksTests(unittest.TestCase):
     def test_the_good_reply_passes_every_check_that_applies(self):
         results = checks.run_checks(case_for(ITEM, GOOD_ITEM))
         self.assertEqual([cid for cid, ok, _ in results if not ok], [])
-        self.assertEqual(len(results), 18)   # 16 before the tool path + no-tool-search + tool-denied-fallback
+        self.assertEqual(len(results), 19)   # 16 before the tool path + no-tool-search + tool-denied-fallback + tool-template-ends-turn
 
     def test_each_result_is_an_id_a_boolean_and_a_note(self):
         for cid, ok, note in checks.run_checks(case_for(ITEM, "nothing useful")):

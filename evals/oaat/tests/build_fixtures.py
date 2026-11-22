@@ -16,8 +16,9 @@ first message, which loads the skill and shows item 1, then the answer to the us
 
 A third set, `tool/`, holds two INVENTED traces of the tool path (items presented with the AskUserQuestion tool). They exist because a
 headless `claude -p` run cannot call that tool (measured), so the tool path can only be graded offline. The INPUT of the tool is
-documented (code.claude.com/docs/en/agent-sdk/user-input); the tool_result envelope is the assumed standard one, UNCONFIRMED (README,
-"The tool path (AskUserQuestion)"). Each trace is ONE turn: an interactive walk-through pauses at every call and the answer returns as
+documented (code.claude.com/docs/en/agent-sdk/user-input); the text of every tool_result uses the envelope OBSERVED in one interactive
+Claude Code session (2026-11-22: `Your questions have been answered: "<question>"="<answer>". You can now continue with these answers in
+mind.`), one sample on one version and so still UNCONFIRMED across versions (README, "The tool path (AskUserQuestion)"). Each trace is ONE turn: an interactive walk-through pauses at every call and the answer returns as
 the tool_result in the same turn, so a skip is the tool_result `Skip for now` and never a new prompt:
 
     explicit-dollar    count line + call 1, answer a label, one plain line + call 2, `Skip for now`, one plain line + call 3, free text
@@ -88,7 +89,7 @@ AFTER = {
         "**Decided:**", "- Nothing yet.", "",
         "**Parked:**", "- Pick the database.", "",
         "**Next action:** Pick the database. It blocks the launch."]),
-    "followup-tangent": "This may be a tangent from the database decision. Continue or refocus?",
+    "followup-tangent": "This may be a tangent from Pick the database. Continue or refocus?",
     "negative-single": ("A Containerfile and a Dockerfile hold the same build instructions in the same format. "
                         "Podman reads both names; the name Containerfile does not tie the file to one tool."),
     "negative-list": "\n".join([
@@ -196,6 +197,13 @@ TOOL = {
 }
 
 
+def observed_envelope(tool_input_, answer):
+    """The text of a tool_result in the envelope OBSERVED in one interactive Claude Code session (2026-11-22): one `"question"="answer"`
+    pair per question, inside a wrapper sentence. One sample, one version: UNCONFIRMED across versions (README, "The tool path")."""
+    pairs = ", ".join(f'"{q["question"]}"="{answer}"' for q in tool_input_["questions"])
+    return f"Your questions have been answered: {pairs}. You can now continue with these answers in mind."
+
+
 def tool_walk(prompt_id, messages, index):
     """One INVENTED turn of an interactive walk on the tool path: the Skill call, then every message with its tool_results, the result event."""
     session = f"INVENTED-tool-{prompt_id}"
@@ -217,7 +225,7 @@ def tool_walk(prompt_id, messages, index):
                 tool_id = f"toolu_INVENTED_Q{index}_{serial}"
                 serial += 1
                 content.append({"type": "tool_use", "id": tool_id, "name": "AskUserQuestion", "input": tool_input_})
-                results.append({"type": "tool_result", "tool_use_id": tool_id, "content": answer})
+                results.append({"type": "tool_result", "tool_use_id": tool_id, "content": observed_envelope(tool_input_, answer)})
         out.append({"type": "assistant", "parent_tool_use_id": None, "session_id": session, "message": {"role": "assistant", "content": content}})
         if results:
             out.append({"type": "user", "parent_tool_use_id": None, "session_id": session, "message": {"role": "user", "content": results}})

@@ -124,7 +124,7 @@ class ResultsFileTests(RunnerCase):
         first = data["prompts"][0]
         self.assertEqual(first["id"], "explicit-dollar")
         self.assertEqual({"id", "pass", "notes"}, set(first["trials"][0]["checks"][0]))
-        self.assertEqual(len(first["trials"][0]["checks"]), 18)   # 16 text-path checks + no-tool-search + tool-denied-fallback
+        self.assertEqual(len(first["trials"][0]["checks"]), 19)   # 16 text-path checks + no-tool-search + tool-denied-fallback + tool-template-ends-turn
 
     def test_fixtures_mode_writes_no_traces_and_no_results_unless_asked(self):
         stream = io.StringIO()
@@ -207,7 +207,7 @@ class ReportFormatTests(unittest.TestCase):
     def test_the_report_lists_checks_by_group(self):
         stream = io.StringIO()
         run_evals.main(["--prompts", str(PROMPTS), "--fixtures", str(TRACES / "after")], stream=stream)
-        self.assertIn("checks passed by group: outcome 48/48, process 44/44, style 37/37, efficiency 30/30", stream.getvalue())
+        self.assertIn("checks passed by group: outcome 48/48, process 55/55, style 37/37, efficiency 30/30", stream.getvalue())
 
 
 if __name__ == "__main__":

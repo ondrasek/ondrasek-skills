@@ -32,7 +32,7 @@ MAX_TOOL_HEADER = 12      # characters of the AskUserQuestion `header`
 MIN_TOOL_OPTIONS, MAX_TOOL_OPTIONS = 2, 4   # the item's 1 to 3 choices plus `Skip for now`
 RECOMMENDED_SUFFIX = "(Recommended)"
 SKIP_LABEL = "Skip for now"
-MAX_COUNT_LINE_WORDS = 20  # the one-line count before the first item ("5 items need you. First one:")
+MAX_COUNT_LINE_WORDS = 30  # the one-line count before the first item ("5 items need you. First one:"); the same limit as the plain line
 MAX_PLAIN_LINE_WORDS = 30  # the ONE short plain line (confirmation, explanation, correction) between two calls
 
 LABELS = ("what it is", "why it matters", "options", "one question")
@@ -46,11 +46,11 @@ GROUPS = {
     "skill-loaded": "process", "skill-trigger": "process",
     "completed": "outcome", "header-number": "outcome", "header-total": "outcome", "no-other-items": "outcome",
     "no-preview": "outcome", "wrapup-headings": "outcome", "tangent-flag": "outcome", "all-items-listed": "outcome",
-    "no-oaat-header": "outcome", "tool-not-allowed": "outcome",
+    "no-oaat-header": "outcome", "tool-not-allowed": "outcome", "tool-early-end": "outcome",
     "one-header": "style", "sections": "style", "options-max-3": "style", "options-numbered": "style", "recommended-marked": "style", "one-question": "style",
     "length-bound": "efficiency", "tool-detours": "efficiency", "turns-bound": "efficiency",
     # the tool path (AskUserQuestion): offline-only checks, see the README section "The tool path (AskUserQuestion)"
-    "no-tool-search": "process", "tool-denied-fallback": "process", "tool-one-call-one-question": "process",
+    "no-tool-search": "process", "tool-denied-fallback": "process", "tool-template-ends-turn": "process", "tool-one-call-one-question": "process",
     "tool-header-short": "style", "tool-options-shape": "style", "tool-recommended-first": "style", "tool-skip-last": "style",
     "tool-question-shape": "style", "tool-no-extra-text": "style",
 }
@@ -307,7 +307,7 @@ def check_wrapup(case):
     return ("wrapup-headings", ok, "Decided, Parked, Next action, in order" if ok else f"missing: {', '.join(missing) or 'none'}; in order: {ordered}")
 
 
-# The tangent flag may name the current item as X ("This may be a tangent from Item 1 of 5, the database decision. Continue or refocus?"):
+# The tangent flag may name the current item as X ("This may be a tangent from Item 4 of 6, the retention rule. Continue or refocus?"):
 # that is the skill's own sentence, not an item header. The pattern is the one that `tangent-flag` accepts: X holds no '.', '?' or
 # newline, so a header between the start of the flag and a later "continue or refocus?" is NOT erased (no DOTALL, no loose span).
 TANGENT_FLAG_RE = re.compile(r"this may be a tangent from [^.?\n]+\.\s*continue or refocus\?", re.IGNORECASE)
@@ -336,20 +336,28 @@ def check_all_listed(case):
 
 
 def check_detours(case):
-    """AskUserQuestion calls are the item presentations of the tool path, not detours: they are not counted."""
-    names = [name for name, _ in trace.tool_calls(case.events)]
-    others = [name for name in names if name not in ("Skill", ask_tool.TOOL)]
+    """AskUserQuestion calls are the item presentations of the tool path, not detours: they are not counted. Neither are the calls that
+    record a milestone answer (ask_tool.is_bookkeeping: the milestones skill, a Bash call running milestones.py, a Read of
+    .cache/milestones.json): the oaat skill requires that recording in the same turn."""
+    calls = trace.tool_calls(case.events)
+    names = [name for name, _ in calls]
+    kept = [(name, data) for name, data in calls if name not in ("Skill", ask_tool.TOOL)]
+    others = [name for name, data in kept if not ask_tool.is_bookkeeping(name, data)]
     return ("tool-detours", len(others) <= MAX_OTHER_TOOL_CALLS,
-            f"tool calls besides Skill and AskUserQuestion: {len(others)} (max {MAX_OTHER_TOOL_CALLS}); AskUserQuestion calls, not counted: {names.count(ask_tool.TOOL)}")
+            f"tool calls besides Skill and AskUserQuestion: {len(others)} (max {MAX_OTHER_TOOL_CALLS}); AskUserQuestion calls, not counted: "
+            f"{names.count(ask_tool.TOOL)}; milestone bookkeeping, not counted: {len(kept) - len(others)}")
 
 
 def check_turns(case):
-    """Every AskUserQuestion call of the graded turn adds a model turn (call, tool_result, next message) to num_turns: not counted."""
+    """Every AskUserQuestion call of the graded turn adds a model turn (call, tool_result, next message) to num_turns: not counted.
+    The same holds for every milestone bookkeeping call of the graded turn (ask_tool.is_bookkeeping)."""
     turns, _ = trace.stats(case.events)
     if turns is None:
         return ("turns-bound", False, "the result event has no num_turns")
-    asked = len(case.asks)
-    return ("turns-bound", turns - asked <= MAX_TURNS, f"num_turns {turns} minus {asked} AskUserQuestion call(s) = {turns - asked} (max {MAX_TURNS})")
+    asked, recorded = len(case.asks), len(ask_tool.bookkeeping_calls(case.turn))
+    left = turns - asked - recorded
+    return ("turns-bound", left <= MAX_TURNS,
+            f"num_turns {turns} minus {asked} AskUserQuestion call(s) minus {recorded} milestone bookkeeping call(s) = {left} (max {MAX_TURNS})")
 
 
 def check_no_tool_search(case):
@@ -535,6 +543,33 @@ def wrapup_ok(text):
     return all(label in found for label in WRAPUP_LABELS) and order == list(WRAPUP_LABELS)
 
 
+def item_number(record):
+    """The N of the 'Item N of M' that the question of one AskUserQuestion record starts with (None when it has no header)."""
+    found = headers(ask_tool.question_text(ask_question(record)))
+    return found[0][0] if found else None
+
+
+def retried(case):
+    """The 1-based indexes of the calls that FAILED (an error result) and were immediately retried, once, for the SAME item.
+
+    The skill: a call that fails on its input is called again once with the input fixed. A failed call followed by a call for the same
+    item is such a retry, and needs no text of its own after it. The retry of a retry is not exempt: a second failure of the same item
+    is not retried a third time, so it needs the template text after it like any denied call. An error result cannot be told apart
+    from a denial, so a denied call that is called again for the same item is allowed too.
+    """
+    asks, found, was_retry = case.asks, set(), False
+    for index, record in enumerate(asks, 1):
+        nxt = asks[index] if index < len(asks) else None
+        failed_call = record["result"] is not None and record["result"]["error"]
+        same = nxt is not None and item_number(record) is not None and item_number(record) == item_number(nxt)
+        if failed_call and same and not was_retry:
+            found.add(index)
+            was_retry = True
+        else:
+            was_retry = False
+    return found
+
+
 def check_tool_no_extra_text(case):
     """The text outside the calls: before the first call the one-line count (or a plain line), between two calls ONE short plain line
     (a confirmation, an explanation or a correction), after the last call nothing, one plain line or the wrap-up.
@@ -542,8 +577,13 @@ def check_tool_no_extra_text(case):
     A plain line: one line, short, no list mark, no `Item N of M` header, no template label, no look-ahead phrase, no other item
     number, no question mark (the question is in the call; the tangent flag is the one sentence that may ask), and no pending
     title except the item of the call after it or the call before it. The wrap-up (Decided, Parked, Next action) may name any title.
+
+    The tangent flag ends the turn: as the text after the last call it is allowed (the one sentence that may ask); anywhere before a
+    call (before the first call, or between two calls) it is a violation, and its question mark counts. The text after a failed call
+    that is retried for the same item is a plain line between two calls; the text after a denied call that is not retried is the
+    fallback, graded by `tool-denied-fallback`.
     """
-    asks, texts = case.asks, ask_tool.segments(case.turn)
+    asks, texts, retries = case.asks, ask_tool.segments(case.turn), retried(case)
     nearby = [{n for n, _ in headers(ask_tool.question_text(ask_question(r)))} for r in asks]
     current = [set(titles_in(case, surface(ask_question(r)))) for r in asks]
     problems, shown = [], []
@@ -551,7 +591,7 @@ def check_tool_no_extra_text(case):
         lines = [line for line in text.splitlines() if line.strip()]
         if not lines:
             continue
-        if gap and not asks[gap - 1]["answered"]:
+        if gap and not asks[gap - 1]["answered"] and gap not in retries:
             shown.append(f"after the denied or failed call {gap}: the text fallback, graded by `tool-denied-fallback` and not here")
             continue
         where = "before the first call" if gap == 0 else "after the last call" if gap == len(asks) else f"between call {gap} and call {gap + 1}"
@@ -561,9 +601,12 @@ def check_tool_no_extra_text(case):
             if len(lines) > MAX_REPLY_LINES or words > MAX_REPLY_WORDS:
                 problems.append(f"{where}: the wrap-up has {len(lines)} lines and {words} words (max {MAX_REPLY_LINES} and {MAX_REPLY_WORDS})")
             continue
-        bare = without_flag(text)
+        closing = gap == len(asks)
+        bare = without_flag(text) if closing else text   # a flag before a call is not erased: it must not end up in a header or question test unseen
         limit = MAX_COUNT_LINE_WORDS if gap == 0 else MAX_PLAIN_LINE_WORDS
         found = []
+        if not closing and TANGENT_FLAG_RE.search(text):
+            found.append("the tangent flag before a call (the flag ends the turn)")
         if len(lines) > 1:
             found.append(f"{len(lines)} lines")
         if words > limit:
@@ -597,9 +640,12 @@ FALLBACK_CHECKS = (check_one_header, check_header_number, check_header_total, ch
 def check_tool_denied_fallback(case):
     """Process check, for BOTH paths. A call without a successful tool_result (an error result, or no result: denied or failed) is only
     recorded, because the skill sanctions the text template as the fallback. But the user saw nothing of the item unless the agent
-    printed something after the call (before the next call or the end of the turn): a denied call with no text after it fails."""
-    asks, texts = case.asks, ask_tool.segments(case.turn)
-    denied = [i for i, r in enumerate(asks, 1) if not r["answered"]]
+    printed something after the call (before the next call or the end of the turn): a denied call with no text after it fails.
+
+    One exception: a call that failed with an error and is immediately called again, once, for the SAME item (the retry after an input
+    error, see `retried`) needs no text after it; the retry is judged on its own."""
+    asks, texts, retries = case.asks, ask_tool.segments(case.turn), retried(case)
+    denied = [i for i, r in enumerate(asks, 1) if not r["answered"] and i not in retries]
     bare = [i for i in denied if not texts[i].strip()]
     broken = []
     if case.tool_path:
@@ -615,8 +661,57 @@ def check_tool_denied_fallback(case):
             if bad:
                 broken.append(f"call {i}: {', '.join(bad)}")
     return ("tool-denied-fallback", not bare and not broken,
-            f"AskUserQuestion calls: {len(asks)}; denied or failed: {len(denied)}; of those with no text after them: {len(bare)}; "
+            f"AskUserQuestion calls: {len(asks)}; denied or failed: {len(denied)}; retried once for the same item, not counted: {len(retries)}; "
+            f"of those with no text after them: {len(bare)}; "
             f"fallback templates in a tool turn failing their text checks: {'; '.join(broken) or 'none'}; expected 0")
+
+
+def is_template_item(text):
+    """A text item of the fallback: a text with an 'Item N of M' header outside the tangent flag AND at least one label of the template
+    (What it is, Why it matters, Options, One question). A lone header line is not enough: that is an extra line, graded by
+    `tool-no-extra-text`. A mangled item with a header and no label at all is not seen here (a known gap)."""
+    bare = without_flag(text)
+    return bool(headers(bare)) and any(label in sections(bare) for label in LABELS)
+
+
+def check_template_ends_turn(case):
+    """Process check, for BOTH paths. A template item printed as text (the fallback for a denied or unavailable tool) ends the turn: no
+    AskUserQuestion call may follow it in the same turn, or the user would see the item twice and the walk would go on without them."""
+    template_seen, after = 0, []
+    for entry in ask_tool.timeline(case.turn):
+        if entry["kind"] == "text" and is_template_item(entry["text"]):
+            template_seen += 1
+        elif entry["kind"] == "call" and entry["name"] == ask_tool.TOOL and template_seen:
+            after.append(entry["id"])
+    return ("tool-template-ends-turn", not after,
+            f"template items printed as text in the turn: {template_seen}; AskUserQuestion calls after the first of them: {len(after)}; expected 0")
+
+
+def check_tool_early_end(case):
+    """Outcome check, tool path. When the last answered call was answered with a chosen option label or `Skip for now` (not free text, so
+    not a stop, a question or a tangent), items remain (its 'Item N of M' has N < M) and nothing asked to stop, the turn must go on: with
+    another AskUserQuestion call (answered or denied) or, as the fallback, a text template for a later item. A closing line or a wrap-up
+    there is an early end: the user is left with nothing to answer."""
+    asks = case.asks
+    answered = [(i, r) for i, r in enumerate(asks, 1) if r["answered"]]
+    if not answered:
+        return ("tool-early-end", False, "no answered AskUserQuestion call in the turn")
+    index, record = answered[-1]
+    if record["label"] is None:
+        return ("tool-early-end", True, f"call {index}, the last answered call, was answered with free text: a stop, a question or a tangent is handled by the other rules")
+    found = headers(ask_tool.question_text(ask_question(record)))
+    if not found:
+        return ("tool-early-end", True, f"call {index} has no 'Item N of M' header, so the items left are unknown (`tool-question-shape` reports it)")
+    n, m = found[0]
+    if n >= m:
+        return ("tool-early-end", True, f"call {index} (item {n} of {m}) was the last item: the wrap-up may follow")
+    if asks[index:]:
+        return ("tool-early-end", True, f"call {index} (item {n} of {m}, label {record['label']!r}) is followed by {len(asks) - index} more call(s)")
+    closing = ask_tool.segments(case.turn)[-1]
+    later = [h for h in headers(without_flag(closing)) if h[0] > n]
+    return ("tool-early-end", bool(later),
+            f"call {index} (item {n} of {m}) was answered with the label {record['label']!r}; {m - n} item(s) remain; "
+            + ("the turn ends with a text template for a later item" if later else "the turn ends with no next call and no template for a later item"))
 
 
 def check_no_tool_question(case):
@@ -626,7 +721,8 @@ def check_no_tool_question(case):
     return ("tool-not-allowed", not asks, f"AskUserQuestion calls in the turn: {len(asks)}; expected 0 on a {case.row.expect} row")
 
 
-COMMON = (check_skill_loaded, check_skill_trigger, check_completed, check_detours, check_turns, check_no_tool_search, check_tool_denied_fallback)
+COMMON = (check_skill_loaded, check_skill_trigger, check_completed, check_detours, check_turns, check_no_tool_search, check_tool_denied_fallback,
+          check_template_ends_turn)
 BY_EXPECT = {
     "item": (check_one_header, check_header_number, check_header_total, check_sections, check_options, check_options_numbered, check_recommended,
              check_one_question, check_no_other_items, check_no_preview, check_length),
@@ -637,7 +733,7 @@ BY_EXPECT = {
 }
 BY_EXPECT["skip"] = BY_EXPECT["item"]
 TOOL_CHECKS = (check_tool_one_call_one_question, check_tool_header_short, check_tool_options_shape, check_tool_recommended_first,
-               check_tool_skip_last, check_tool_question_shape, check_tool_no_extra_text)
+               check_tool_skip_last, check_tool_question_shape, check_tool_no_extra_text, check_tool_early_end)
 # On the tool path the text-template style checks (one-header, sections, options-*, recommended-marked, one-question, length-bound)
 # do not apply. The outcome checks that read the item header and titles still apply, per call, on the question and its options.
 TOOL_ITEM = (check_tool_header_number, check_tool_header_total, check_tool_no_other_items, check_tool_no_preview) + TOOL_CHECKS
