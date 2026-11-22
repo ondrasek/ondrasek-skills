@@ -20,6 +20,7 @@ from pathlib import Path
 
 UNIT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(UNIT / "python"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_common" / "python"))  # after python/: the shared modules win
 
 import cases  # noqa: E402
 import checks  # noqa: E402

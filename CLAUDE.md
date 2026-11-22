@@ -10,6 +10,7 @@ Claude Code plugin marketplace (`ondrasek-skills`) holding personal agent skills
 
 - `tests/milestones/` — unit tests of the `milestones` plugin (script, statusline, `hooks/` reminder).
 - `tests/auto-commit/`, `tests/block-force-push/` — tests of the two git hook plugins (`plugins/<name>/hooks/`).
+- `evals/_common/` — `agent_trace.py` and `runner_cmd.py`, imported by all six harnesses; never copy them into a harness.
 - `evals/<plugin>/` — evals for `oaat` (ported from the PA015 sample), `agent-md-audit`, `auto-commit`, `block-force-push`, `milestones`, `sitrep`: workspace-state ground truth, fixtures built in code, PASS/FAIL/INCONCLUSIVE.
 
 ## Rules
@@ -19,7 +20,7 @@ Claude Code plugin marketplace (`ondrasek-skills`) holding personal agent skills
 - Keep `version` in `plugin.json` and `marketplace.json` in sync; bump on user-visible changes.
 - Skill directory name must match the `name` in its `SKILL.md`.
 - Run `python3 -m unittest discover -s tests/milestones` and `make -C evals/oaat test` (offline) after touching `milestones` or `oaat`.
-- After touching any plugin or its evals run `make -C evals/<plugin> test` (offline).
+- After touching any plugin or its evals run `make -C evals/<plugin> test` (offline); after touching `evals/_common` run `make -C evals/_common test-all`.
 - Never run `make -C evals/<plugin> eval` unasked: it spends model calls (and web fetches) on the user's account.
 - Never commit a live `CLAUDE.md`, `AGENTS.md`, `.claude/` or `.cache/milestones.json` under `evals/`: the harnesses build fixtures in code.
 - Plugin names cannot start with `claude-`, `anthropic-` or `cc-plugin-`: the validator rejects them.

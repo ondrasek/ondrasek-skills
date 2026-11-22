@@ -25,11 +25,15 @@ import sys
 import tempfile
 from pathlib import Path
 
-import agent_trace as trace
-import cases
-import checks
-import runner_cmd
-import state
+COMMON = Path(__file__).resolve().parents[2] / "_common" / "python"   # evals/_common/python: the shared agent_trace and runner_cmd
+if str(COMMON) not in sys.path:
+    sys.path.insert(0, str(COMMON))
+
+import agent_trace as trace  # noqa: E402
+import cases  # noqa: E402
+import checks  # noqa: E402
+import runner_cmd  # noqa: E402
+import state  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 UNIT = HERE.parent
@@ -133,8 +137,8 @@ def grade_trial(row, events, states, note="", plugin=""):
     case = checks.Case.build(row, events, states, note, plugin)
     results = [{"id": cid, "pass": ok, "notes": note} for cid, ok, note in checks.run_checks(case)]
     result = trace.result_event(events) or {}
-    # the cost of the LAST result event: agent_trace.stats() sums every result event, and a resumed or continued session reports the whole
-    return {"verdict": verdict(results, case), "warnings": warnings_of(results), "checks": results, "turns": result.get("num_turns"), "cost": result.get("total_cost_usd"),
+    turns, cost = trace.stats(events)   # the cost of the LAST result event (a resumed or continued session reports the whole session)
+    return {"verdict": verdict(results, case), "warnings": warnings_of(results), "checks": results, "turns": turns, "cost": cost,
             "duration_ms": result.get("duration_ms")}
 
 

@@ -87,6 +87,7 @@ make -C evals/oaat test                                # oaat eval harness, offl
 make -C evals/oaat eval ARGS="--only explicit-name --trials 1"   # a REAL run: one model call on your account
 make -C evals/agent-md-audit test                      # agent-md-audit evals, offline, no model call
 make -C evals/agent-md-audit eval ARGS="--only explicit-defects"   # a REAL run: model calls and web fetches on your account
+make -C evals/_common test-all                         # the shared trace reader and command runner, then all six harnesses: offline, no model call
 make -C evals/auto-commit test                         # auto-commit, block-force-push, milestones, sitrep evals: offline, no model call
 make -C evals/block-force-push test
 make -C evals/milestones test
@@ -95,6 +96,8 @@ make -C evals/block-force-push eval ARGS="--only plain-push-control --trials 1" 
 ```
 
 `evals/oaat/` grades the live `plugins/oaat` skill (deterministic checks on the reply and the tool calls, optional rubric judge); see its [README](evals/oaat/README.md). `evals/agent-md-audit/` grades `plugins/agent-md-audit` on the files it leaves behind (nothing may change before approval; the apply turn must fix CLAUDE.md and leave AGENTS.md alone); see its [README](evals/agent-md-audit/README.md), including why it does not use `claude plugin eval`.
+
+`evals/_common/` holds the two modules all six harnesses import (`agent_trace.py`, the stream-json reader, and `runner_cmd.py`, the command runner); they are not copied into the harnesses.
 
 The other four plugins have evals that grade what a real agent does once the plugin is loaded, from the state it leaves behind (the unit tests under `tests/` only feed invented input to the scripts): `evals/auto-commit/` (the Stop-hook report leads to a WIP commit, a merge instead of a rebase, no `.env`, no invented remote), `evals/block-force-push/` (a blocked history rewrite leaves the remote unchanged and the agent does not work around it), `evals/milestones/` (skill triggering, tracker state valid and written only through the script, the Stop reminder) and `evals/sitrep/` (skill triggering, a parseable `data.js` outside the project, cleanup). A trial is PASS, FAIL or INCONCLUSIVE (the behaviour under test never happened); checks that rest only on the model's prose are advisory (WARN). None of the four has had a real run yet: the offline part is verified, and each README names its canary case and lists what is unconfirmed.
 
