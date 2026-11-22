@@ -30,9 +30,9 @@ failures:
   followup-stop trial 1: wrapup-headings: missing: next action; in order: True
   negative-list trial 1: skill-trigger: Skill tool called for oaat: 1 time(s); expected 0
   negative-list trial 1: all-items-listed: pending titles missing from the reply: 4 of 5
-  negative-list trial 1: no-oaat-header: 'Item N of M' headers in the reply: 1; expected 0
+  negative-list trial 1: no-oaat-header: 'Item N of M' headers in the reply: 1, in AskUserQuestion questions: 0; expected 0
 
-checks passed by group: outcome 35/43, process 31/33, style 29/37, efficiency 30/30
+checks passed by group: outcome 40/48, process 42/44, style 29/37, efficiency 30/30
 cost reported by the result events: $0.1760 over 11 runs
 summary: prompts passed 6/11 (every trial), trials passed 6/11, pass rate 54%
 (exit code 1)

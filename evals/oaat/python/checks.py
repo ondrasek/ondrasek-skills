@@ -10,10 +10,11 @@ explains itself. The checks fall into the four groups of the OpenAI post (https:
 
 Which checks apply to a prompt depends on its `expect` column (see run_checks).
 
-A second path exists: when the turn calls the `AskUserQuestion` tool for an item (expect item or skip), the item is in the tool
-input and not in the reply text, so the text-template style checks give way to the tool checks (see `Case.tool_path` and
-`run_checks`). A turn without that call is graded exactly as before. The tool path can only be exercised on invented traces: a
-headless `claude -p` run has no such tool (README, "The tool path").
+A second path exists: when the turn presents an item with the `AskUserQuestion` tool and the user answers (expect item or skip), the
+item is in the tool input and not in the reply text, so the text-template style checks give way to the tool checks (see
+`Case.tool_path` and `run_checks`). An interactive walk-through is ONE turn with several sequential calls, so the tool checks grade
+every call on its own. A turn without an answered call (no call, or a denied or failed one) is graded exactly as before, on the
+text. The tool path can only be exercised on invented traces: a headless `claude -p` run has no such tool (README, "The tool path").
 """
 import re
 from dataclasses import dataclass, field, replace
@@ -32,6 +33,7 @@ MIN_TOOL_OPTIONS, MAX_TOOL_OPTIONS = 2, 4   # the item's 1 to 3 choices plus `Sk
 RECOMMENDED_SUFFIX = "(Recommended)"
 SKIP_LABEL = "Skip for now"
 MAX_COUNT_LINE_WORDS = 20  # the one-line count before the first item ("5 items need you. First one:")
+MAX_PLAIN_LINE_WORDS = 30  # the ONE short plain line (confirmation, explanation, correction) between two calls
 
 LABELS = ("what it is", "why it matters", "options", "one question")
 WRAPUP_LABELS = ("decided", "parked", "next action")
@@ -44,11 +46,11 @@ GROUPS = {
     "skill-loaded": "process", "skill-trigger": "process",
     "completed": "outcome", "header-number": "outcome", "header-total": "outcome", "no-other-items": "outcome",
     "no-preview": "outcome", "wrapup-headings": "outcome", "tangent-flag": "outcome", "all-items-listed": "outcome",
-    "no-oaat-header": "outcome",
+    "no-oaat-header": "outcome", "tool-not-allowed": "outcome",
     "one-header": "style", "sections": "style", "options-max-3": "style", "options-numbered": "style", "recommended-marked": "style", "one-question": "style",
     "length-bound": "efficiency", "tool-detours": "efficiency", "turns-bound": "efficiency",
     # the tool path (AskUserQuestion): offline-only checks, see the README section "The tool path (AskUserQuestion)"
-    "no-tool-search": "process", "tool-one-call-one-question": "process",
+    "no-tool-search": "process", "tool-denied-fallback": "process", "tool-one-call-one-question": "process",
     "tool-header-short": "style", "tool-options-shape": "style", "tool-recommended-first": "style", "tool-skip-last": "style",
     "tool-question-shape": "style", "tool-no-extra-text": "style",
 }
@@ -76,9 +78,18 @@ class Case:
         return ask_tool.last_turn(self.events)
 
     @property
+    def asks(self):
+        """The AskUserQuestion calls of the graded turn, in order (see ask_tool.ask_records): answered, denied and failed ones."""
+        return ask_tool.ask_records(self.turn)
+
+    @property
     def tool_path(self):
-        """True when the item of this turn is presented with AskUserQuestion: the text-template checks then do not apply."""
-        return self.row.expect in ("item", "skip") and bool(ask_tool.ask_calls(self.turn))
+        """True when an item of this turn is presented with AskUserQuestion AND the call got a tool_result that is not an error.
+
+        A denied or failed call (an error result, or no result at all) is only recorded: the skill sanctions the text template as the
+        fallback, so such a turn is graded on the text path (and `tool-denied-fallback` fails it when nothing was printed after the call).
+        """
+        return self.row.expect in ("item", "skip") and any(r["answered"] for r in self.asks)
 
 
 def plain(line):
@@ -297,17 +308,25 @@ def check_wrapup(case):
 
 
 # The tangent flag may name the current item as X ("This may be a tangent from Item 1 of 5, the database decision. Continue or refocus?"):
-# that is the skill's own sentence, not an item header. A real run (2026-11-22) was wrongly failed for it.
-TANGENT_FLAG_RE = re.compile(r"this may be a tangent from.*?continue or refocus\?", re.IGNORECASE | re.DOTALL)
+# that is the skill's own sentence, not an item header. The pattern is the one that `tangent-flag` accepts: X holds no '.', '?' or
+# newline, so a header between the start of the flag and a later "continue or refocus?" is NOT erased (no DOTALL, no loose span).
+TANGENT_FLAG_RE = re.compile(r"this may be a tangent from [^.?\n]+\.\s*continue or refocus\?", re.IGNORECASE)
+
+
+def without_flag(text):
+    return TANGENT_FLAG_RE.sub("", text)
 
 
 def check_no_header(case):
-    found = headers(TANGENT_FLAG_RE.sub("", case.reply))
-    return ("no-oaat-header", not found, f"'Item N of M' headers in the reply: {len(found)}; expected 0")
+    """No 'Item N of M' in the reply, outside the tangent flag; on a turn that called AskUserQuestion, none in the question texts either."""
+    found = headers(without_flag(case.reply))
+    in_questions = [h for r in case.asks for q in ask_tool.questions(r["input"]) for h in headers(without_flag(ask_tool.question_text(q)))]
+    return ("no-oaat-header", not found and not in_questions,
+            f"'Item N of M' headers in the reply: {len(found)}, in AskUserQuestion questions: {len(in_questions)}; expected 0")
 
 
 def check_tangent(case):
-    ok = re.search(r"this may be a tangent from [^.?\n]+\.\s*continue or refocus\?", case.reply, re.IGNORECASE) is not None
+    ok = TANGENT_FLAG_RE.search(case.reply) is not None
     return ("tangent-flag", ok, "the reply flags the tangent: 'This may be a tangent from X. Continue or refocus?'" if ok else "the tangent flag is missing")
 
 
@@ -317,15 +336,20 @@ def check_all_listed(case):
 
 
 def check_detours(case):
-    others = [name for name, _ in trace.tool_calls(case.events) if name != "Skill"]
-    return ("tool-detours", len(others) <= MAX_OTHER_TOOL_CALLS, f"tool calls besides Skill: {len(others)} (max {MAX_OTHER_TOOL_CALLS})")
+    """AskUserQuestion calls are the item presentations of the tool path, not detours: they are not counted."""
+    names = [name for name, _ in trace.tool_calls(case.events)]
+    others = [name for name in names if name not in ("Skill", ask_tool.TOOL)]
+    return ("tool-detours", len(others) <= MAX_OTHER_TOOL_CALLS,
+            f"tool calls besides Skill and AskUserQuestion: {len(others)} (max {MAX_OTHER_TOOL_CALLS}); AskUserQuestion calls, not counted: {names.count(ask_tool.TOOL)}")
 
 
 def check_turns(case):
+    """Every AskUserQuestion call of the graded turn adds a model turn (call, tool_result, next message) to num_turns: not counted."""
     turns, _ = trace.stats(case.events)
     if turns is None:
         return ("turns-bound", False, "the result event has no num_turns")
-    return ("turns-bound", turns <= MAX_TURNS, f"num_turns {turns} (max {MAX_TURNS})")
+    asked = len(case.asks)
+    return ("turns-bound", turns - asked <= MAX_TURNS, f"num_turns {turns} minus {asked} AskUserQuestion call(s) = {turns - asked} (max {MAX_TURNS})")
 
 
 def check_no_tool_search(case):
@@ -334,116 +358,295 @@ def check_no_tool_search(case):
     return ("no-tool-search", not found, f"ToolSearch calls that mention AskUserQuestion: {len(found)}; expected 0 (the skill says do not search for it)")
 
 
-def tool_item(case):
-    """(the AskUserQuestion calls of the turn, the first question of the first call or {})."""
-    return ask_tool.ask_calls(case.turn), ask_tool.first_question(case.turn)
+def ask_question(record):
+    """The first question of one AskUserQuestion record ({} when the input has none)."""
+    return ask_tool.first_question_of(record["input"])
+
+
+def per_call(case, check_id, judge):
+    """One verdict for a check that grades every AskUserQuestion call of the turn on its own.
+
+    judge(question, record, index) returns (problem or None, what was measured). The note names every call; the check passes
+    only when every call passes, and the note of a failure says which call and why.
+    """
+    parts, ok = [], True
+    for index, record in enumerate(case.asks, 1):
+        problem, measured = judge(ask_question(record), record, index)
+        ok = ok and problem is None
+        parts.append(f"call {index}: {measured}" + (f" -> {problem}" if problem else ""))
+    return (check_id, ok and bool(parts), "; ".join(parts) or "no AskUserQuestion call in the turn")
 
 
 def check_tool_one_call_one_question(case):
-    calls, _ = tool_item(case)
-    asked = len(ask_tool.questions(calls[0])) if calls else 0
-    ok = len(calls) == 1 and asked == 1
-    return ("tool-one-call-one-question", ok, f"AskUserQuestion calls in the turn: {len(calls)}; questions in the first call: {asked}; expected 1 and 1")
+    """Per call: exactly one question. Across calls: sequential. A call must get its tool_result before the next call is made;
+    two calls in one assistant message, or two calls without a tool_result between them, are batching ("never batch")."""
+    asks = case.asks
+    counts = [len(ask_tool.questions(r["input"])) for r in asks]
+    overlaps = ask_tool.unanswered_overlaps(case.turn)
+    ok = bool(asks) and all(c == 1 for c in counts) and not overlaps
+    return ("tool-one-call-one-question", ok, f"AskUserQuestion calls in the turn: {len(asks)}; questions per call: {counts}; "
+                                              f"calls made before the previous call had its tool_result: {len(overlaps)}; expected 1 question each and 0")
+
+
+def judge_header(question, record, index):
+    header = question.get("header")
+    if not isinstance(header, str) or not header.strip():
+        return "no header, or it is empty", "no header"
+    # len() of a Python str counts code points, which is what the tool's limit of 12 characters is read as here
+    return (None if len(header) <= MAX_TOOL_HEADER else f"more than {MAX_TOOL_HEADER}"), f"header {header!r} has {len(header)} characters"
 
 
 def check_tool_header_short(case):
-    header = tool_item(case)[1].get("header")
-    if not isinstance(header, str) or not header.strip():
-        return ("tool-header-short", False, "the question has no header, or it is empty")
-    return ("tool-header-short", len(header) <= MAX_TOOL_HEADER, f"header {header!r}: {len(header)} characters (max {MAX_TOOL_HEADER})")
+    return per_call(case, "tool-header-short", judge_header)
 
 
-def check_tool_options_shape(case):
-    question = tool_item(case)[1]
+def judge_options_shape(question, record, index):
     options = question.get("options")
     if not isinstance(options, list):
-        return ("tool-options-shape", False, "the question has no options list")
+        return "the question has no options list", "no options"
     bad = [i for i, o in enumerate(options, 1)
            if not (isinstance(o, dict) and all(isinstance(o.get(k), str) and o[k].strip() for k in ("label", "description")))]
     multi = question.get("multiSelect", False)
     ok = MIN_TOOL_OPTIONS <= len(options) <= MAX_TOOL_OPTIONS and not bad and multi is False
-    return ("tool-options-shape", ok, f"options: {len(options)} (allowed {MIN_TOOL_OPTIONS} to {MAX_TOOL_OPTIONS}); without label and description: "
-                                       f"{bad or 'none'}; multiSelect {multi!r} (must be false or absent)")
+    measured = (f"{len(options)} options (allowed {MIN_TOOL_OPTIONS} to {MAX_TOOL_OPTIONS}), without label and description: {bad or 'none'}, "
+                f"multiSelect {multi!r}")
+    return (None if ok else "options must be 2 to 4, each with label and description, multiSelect false or absent"), measured
+
+
+def check_tool_options_shape(case):
+    return per_call(case, "tool-options-shape", judge_options_shape)
 
 
 def option_labels(question):
-    options = question.get("options")
-    return [o["label"] for o in options if isinstance(o, dict) and isinstance(o.get("label"), str)] if isinstance(options, list) else []
+    return ask_tool.option_labels(question)
+
+
+def judge_recommended(question, record, index):
+    labels = option_labels(question)
+    if not labels:
+        return "the question has no option labels", "no labels"
+    # strip: a trailing space after the suffix is accepted, as one after `Skip for now` is
+    marked = [i for i, label in enumerate(labels, 1) if label.strip().endswith(RECOMMENDED_SUFFIX)]
+    return (None if marked == [1] else "only option 1 may carry the suffix"), f"options whose label ends with {RECOMMENDED_SUFFIX}: {marked or 'none'}"
 
 
 def check_tool_recommended_first(case):
-    labels = option_labels(tool_item(case)[1])
-    if not labels:
-        return ("tool-recommended-first", False, "the question has no option labels")
-    marked = [i for i, label in enumerate(labels, 1) if label.rstrip().endswith(RECOMMENDED_SUFFIX)]
-    return ("tool-recommended-first", marked == [1], f"options whose label ends with {RECOMMENDED_SUFFIX}: {marked or 'none'}; expected only option 1")
+    return per_call(case, "tool-recommended-first", judge_recommended)
+
+
+def judge_skip_last(question, record, index):
+    labels = option_labels(question)
+    last = labels[-1] if labels else None
+    return (None if isinstance(last, str) and last.strip() == SKIP_LABEL else f"the last label must be {SKIP_LABEL!r}"), f"last option label {last!r}"
 
 
 def check_tool_skip_last(case):
-    labels = option_labels(tool_item(case)[1])
-    last = labels[-1] if labels else None
-    return ("tool-skip-last", last == SKIP_LABEL, f"last option label: {last!r}; expected {SKIP_LABEL!r}")
+    return per_call(case, "tool-skip-last", judge_skip_last)
 
 
 TOOL_QUESTION_RE = re.compile(r"\s*Item\s+(\d+)\s+of\s+(\d+),\s*([^:?\n]+?):\s*([^?\n]+?)\.(?:\s|$)", re.IGNORECASE)
 
 
-def check_tool_question_shape(case):
-    text = ask_tool.question_text(tool_item(case)[1])
+def judge_question_shape(question, record, index):
+    text = ask_tool.question_text(question)
     match = TOOL_QUESTION_RE.match(text)
     marks = text.count("?")
     if not match:
-        return ("tool-question-shape", False, f"the question does not start with 'Item N of M, type: Title.' ({text[:50]!r}); question marks: {marks}")
-    return ("tool-question-shape", marks == 1, f"starts with Item {match.group(1)} of {match.group(2)}, type {match.group(3)!r}, title {match.group(4)!r}; "
-                                              f"question marks: {marks}; expected exactly 1")
+        return "the question must start with 'Item N of M, type: Title.'", f"starts with {text[:40]!r}, {marks} question mark(s)"
+    return (None if marks == 1 else "exactly one question mark is allowed"), (
+        f"Item {match.group(1)} of {match.group(2)}, type {match.group(3)!r}, title {match.group(4)!r}, {marks} question mark(s)")
+
+
+def check_tool_question_shape(case):
+    return per_call(case, "tool-question-shape", judge_question_shape)
+
+
+def surface(question):
+    """Everything of one call that the user reads: the question, the option labels and the option descriptions."""
+    return "\n".join([ask_tool.question_text(question), *option_labels(question), *ask_tool.option_descriptions(question)])
+
+
+def titles_in(case, text):
+    return [t for t in case.titles if t.lower() in text.lower()]
+
+
+def check_tool_header_number(case):
+    """Per call, in order: the first call is item previous+1 (previous: the last header of the earlier turns, else 0); every later call is
+    the previous call's item + 1, or the same item again when its answer was free text ("Other", a question, a disagreement) or it failed."""
+    number = previous_header_number(case.history)
+    repeat_ok = False
+
+    def judge(question, record, index):
+        nonlocal number, repeat_ok
+        found = headers(ask_tool.question_text(question))
+        allowed = {number + 1} | ({number} if repeat_ok and index > 1 else set())
+        repeat_ok = not record["answered"] or record["label"] is None
+        if len(found) != 1:
+            return "the question needs exactly one 'Item N of M' header", f"{len(found)} headers, expected item {sorted(allowed)}"
+        got = found[0][0]
+        number = got
+        return (None if got in allowed else f"expected item {sorted(allowed)}"), f"item {got}"
+
+    return per_call(case, "header-number", judge)
+
+
+def check_tool_header_total(case):
+    total = len(case.titles)
+
+    def judge(question, record, index):
+        found = headers(ask_tool.question_text(question))
+        if not found or not total:
+            return "no header or no pending items to compare", f"no header (items in prompt: {total})"
+        return (None if found[0][1] == total else f"the prompt lists {total}"), f"header says {found[0][1]} items"
+
+    return per_call(case, "header-total", judge)
+
+
+def check_tool_no_other_items(case):
+    def judge(question, record, index):
+        found = titles_in(case, surface(question))
+        return (None if len(found) <= 1 else "at most 1 pending title may appear"), f"pending titles in the question and options: {len(found)} ({'; '.join(found) or 'none'})"
+
+    return per_call(case, "no-other-items", judge)
+
+
+def check_tool_no_preview(case):
+    def judge(question, record, index):
+        text = surface(question)
+        stray = len(re.findall(r"\bitem\s+\d+\b", text, re.IGNORECASE)) - len(headers(ask_tool.question_text(question)))
+        phrases = [p for p in PREVIEW_PHRASES if p in text.lower()]
+        problem = None if stray <= 0 and not phrases else "no other item number and no look-ahead phrase"
+        return problem, f"extra item numbers: {max(stray, 0)}, look-ahead phrases: {', '.join(phrases) or 'none'}"
+
+    return per_call(case, "no-preview", judge)
+
+
+LABEL_LINE_RE = re.compile(r"^(?:" + "|".join(LABELS + WRAPUP_LABELS + ("recommendation",)) + r")\s*:", re.IGNORECASE)
+
+
+def labelled(line):
+    """True for a line that starts with a template or wrap-up label and a colon ('**Parked:** x'), not for a plain 'Parked for later.'"""
+    return LABEL_LINE_RE.match(plain(line).lstrip("-• ").strip()) is not None
+
+
+def wrapup_ok(text):
+    found = sections(text)
+    order = [label for label in found if label in WRAPUP_LABELS]
+    return all(label in found for label in WRAPUP_LABELS) and order == list(WRAPUP_LABELS)
 
 
 def check_tool_no_extra_text(case):
-    """Outside the call the agent may print the one-line count before the first item, and nothing else."""
-    text = ask_tool.text_outside(case.turn)
-    lines = [line for line in text.splitlines() if line.strip()]
-    words = len(text.split())
-    problems = []
-    if len(lines) > 1:
-        problems.append(f"{len(lines)} lines")
-    if words > MAX_COUNT_LINE_WORDS:
-        problems.append(f"{words} words (max {MAX_COUNT_LINE_WORDS})")
-    if any(BULLET_RE.match(line) for line in lines):
-        problems.append("a numbered or bulleted line")
-    if headers(text):
-        problems.append("an 'Item N of M' header")
-    if any(label_of(line) for line in lines):
-        problems.append("a template label")
-    return ("tool-no-extra-text", not problems, f"text outside the tool call: {len(lines)} line(s), {words} words; " + (", ".join(problems) or "only a count line, or nothing"))
+    """The text outside the calls: before the first call the one-line count (or a plain line), between two calls ONE short plain line
+    (a confirmation, an explanation or a correction), after the last call nothing, one plain line or the wrap-up.
+
+    A plain line: one line, short, no list mark, no `Item N of M` header, no template label, no look-ahead phrase, no other item
+    number, no question mark (the question is in the call; the tangent flag is the one sentence that may ask), and no pending
+    title except the item of the call after it or the call before it. The wrap-up (Decided, Parked, Next action) may name any title.
+    """
+    asks, texts = case.asks, ask_tool.segments(case.turn)
+    nearby = [{n for n, _ in headers(ask_tool.question_text(ask_question(r)))} for r in asks]
+    current = [set(titles_in(case, surface(ask_question(r)))) for r in asks]
+    problems, shown = [], []
+    for gap, text in enumerate(texts):
+        lines = [line for line in text.splitlines() if line.strip()]
+        if not lines:
+            continue
+        if gap and not asks[gap - 1]["answered"]:
+            shown.append(f"after the denied or failed call {gap}: the text fallback, graded by `tool-denied-fallback` and not here")
+            continue
+        where = "before the first call" if gap == 0 else "after the last call" if gap == len(asks) else f"between call {gap} and call {gap + 1}"
+        words = len(text.split())
+        shown.append(f"{where}: {len(lines)} line(s), {words} words")
+        if gap == len(asks) and wrapup_ok(text):
+            if len(lines) > MAX_REPLY_LINES or words > MAX_REPLY_WORDS:
+                problems.append(f"{where}: the wrap-up has {len(lines)} lines and {words} words (max {MAX_REPLY_LINES} and {MAX_REPLY_WORDS})")
+            continue
+        bare = without_flag(text)
+        limit = MAX_COUNT_LINE_WORDS if gap == 0 else MAX_PLAIN_LINE_WORDS
+        found = []
+        if len(lines) > 1:
+            found.append(f"{len(lines)} lines")
+        if words > limit:
+            found.append(f"{words} words (max {limit})")
+        if any(BULLET_RE.match(line) for line in lines):
+            found.append("a numbered or bulleted line")
+        if headers(bare):
+            found.append("an 'Item N of M' header")
+        if any(labelled(line) for line in lines):
+            found.append("a template or wrap-up label")
+        if "?" in bare:
+            found.append("a question mark")
+        if [p for p in PREVIEW_PHRASES if p in text.lower()]:
+            found.append("a look-ahead phrase")
+        allowed_numbers = {n for index in (gap - 1, gap) if 0 <= index < len(asks) for n in nearby[index]}
+        if [n for n in re.findall(r"\bitem\s+(\d+)\b", bare, re.IGNORECASE) if int(n) not in allowed_numbers]:
+            found.append("another item's number")
+        allowed_titles = set().union(*(current[index] for index in (gap - 1, gap) if 0 <= index < len(asks)))
+        extra = [t for t in titles_in(case, text) if t not in allowed_titles]
+        if extra:
+            found.append(f"another pending title ({'; '.join(extra)})")
+        if found:
+            problems.append(f"{where}: " + ", ".join(found))
+    return ("tool-no-extra-text", not problems, "text outside the calls: " + ("; ".join(shown) or "none") + "; " + ("; ".join(problems) or "only plain lines and a wrap-up"))
 
 
-def on_question(check):
-    """The outcome check `check`, run on the text of the tool question instead of the reply (the item is in the tool input)."""
-    def run(case):
-        return check(replace(case, reply=ask_tool.question_text(tool_item(case)[1])))
-    return run
+FALLBACK_CHECKS = (check_one_header, check_header_number, check_header_total, check_sections, check_options, check_options_numbered, check_recommended,
+                   check_one_question, check_no_other_items, check_no_preview, check_length)
 
 
-COMMON = (check_skill_loaded, check_skill_trigger, check_completed, check_detours, check_turns, check_no_tool_search)
+def check_tool_denied_fallback(case):
+    """Process check, for BOTH paths. A call without a successful tool_result (an error result, or no result: denied or failed) is only
+    recorded, because the skill sanctions the text template as the fallback. But the user saw nothing of the item unless the agent
+    printed something after the call (before the next call or the end of the turn): a denied call with no text after it fails."""
+    asks, texts = case.asks, ask_tool.segments(case.turn)
+    denied = [i for i, r in enumerate(asks, 1) if not r["answered"]]
+    bare = [i for i in denied if not texts[i].strip()]
+    broken = []
+    if case.tool_path:
+        # a mixed turn (an answered call and a denied one) is graded on the tool path, but the text after a denied call is the sanctioned
+        # fallback: it must be a good template for that item. A turn with only denied calls is graded on the text path as a whole.
+        for i in denied:
+            if i in bare:
+                continue
+            found = headers(ask_tool.question_text(ask_question(asks[i - 1])))
+            history = f"Item {found[0][0] - 1} of {found[0][1]}" if found else case.history
+            sub = replace(case, reply=texts[i], history=history)
+            bad = [cid for cid, ok, _ in (check(sub) for check in FALLBACK_CHECKS) if not ok]
+            if bad:
+                broken.append(f"call {i}: {', '.join(bad)}")
+    return ("tool-denied-fallback", not bare and not broken,
+            f"AskUserQuestion calls: {len(asks)}; denied or failed: {len(denied)}; of those with no text after them: {len(bare)}; "
+            f"fallback templates in a tool turn failing their text checks: {'; '.join(broken) or 'none'}; expected 0")
+
+
+def check_no_tool_question(case):
+    """On a row that allows no item presentation (stop, tangent, list, none) ANY AskUserQuestion call is a violation: the tangent
+    rule says no item header and no repeat of the item, stop gives the wrap-up."""
+    asks = case.asks
+    return ("tool-not-allowed", not asks, f"AskUserQuestion calls in the turn: {len(asks)}; expected 0 on a {case.row.expect} row")
+
+
+COMMON = (check_skill_loaded, check_skill_trigger, check_completed, check_detours, check_turns, check_no_tool_search, check_tool_denied_fallback)
 BY_EXPECT = {
     "item": (check_one_header, check_header_number, check_header_total, check_sections, check_options, check_options_numbered, check_recommended,
              check_one_question, check_no_other_items, check_no_preview, check_length),
-    "stop": (check_wrapup, check_no_header, check_length),
-    "tangent": (check_tangent, check_no_header, lambda case: check_one_question(case, labelled=False), check_length),
-    "list": (check_all_listed, check_no_header),
-    "none": (check_no_header,),
+    "stop": (check_wrapup, check_no_header, check_length, check_no_tool_question),
+    "tangent": (check_tangent, check_no_header, lambda case: check_one_question(case, labelled=False), check_length, check_no_tool_question),
+    "list": (check_all_listed, check_no_header, check_no_tool_question),
+    "none": (check_no_header, check_no_tool_question),
 }
 BY_EXPECT["skip"] = BY_EXPECT["item"]
 TOOL_CHECKS = (check_tool_one_call_one_question, check_tool_header_short, check_tool_options_shape, check_tool_recommended_first,
                check_tool_skip_last, check_tool_question_shape, check_tool_no_extra_text)
 # On the tool path the text-template style checks (one-header, sections, options-*, recommended-marked, one-question, length-bound)
-# do not apply. The outcome checks that read the item header and titles still apply, on the text of the question.
-TOOL_ITEM = tuple(on_question(c) for c in (check_header_number, check_header_total, check_no_other_items, check_no_preview)) + TOOL_CHECKS
+# do not apply. The outcome checks that read the item header and titles still apply, per call, on the question and its options.
+TOOL_ITEM = (check_tool_header_number, check_tool_header_total, check_tool_no_other_items, check_tool_no_preview) + TOOL_CHECKS
 
 
 def run_checks(case):
     """Every check that applies to the case, as [(id, passed, note)].
 
-    A turn that calls AskUserQuestion for an item (expect item or skip) is graded on the tool path; every other turn on the text path.
+    A turn with an answered AskUserQuestion call for an item (expect item or skip) is graded on the tool path, call by call; every
+    other turn (no call, or only denied or failed calls) on the text path.
     """
     return [check(case) for check in COMMON + (TOOL_ITEM if case.tool_path else BY_EXPECT[case.row.expect])]

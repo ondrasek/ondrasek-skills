@@ -191,12 +191,25 @@ class OtherExpectChecks(unittest.TestCase):
         self.assertFalse(passes(case_for(TANGENT, "This may be a tangent. Continue or refocus?"), "tangent-flag"))
 
     def test_the_tangent_flag_may_name_the_item_without_counting_as_a_header(self):
-        # a real reply (2026-11-22): the flag names the current item as X; that is the skill's own sentence
-        flag = "This may be a tangent from Item 1 of 5, the database decision. Continue or refocus?"
+        # the flag may name the current item as X; that is the skill's own sentence (invented text, same structure as a real reply)
+        flag = "This may be a tangent from Item 2 of 4, the hosting choice. Continue or refocus?"
         self.assertTrue(passes(case_for(TANGENT, flag), "no-oaat-header"))
-        # a header or a 'Back to item 1 of 5' outside the flag still fails
-        self.assertFalse(passes(case_for(TANGENT, flag + "\nBack to Item 1 of 5."), "no-oaat-header"))
-        self.assertFalse(passes(case_for(TANGENT, flag + "\n**Item 1 of 5, decision: Database**"), "no-oaat-header"))
+        self.assertTrue(passes(case_for(TANGENT, flag), "tangent-flag"))
+        # a header or a 'Back to item 2 of 4' outside the flag still fails
+        self.assertFalse(passes(case_for(TANGENT, flag + "\nBack to Item 2 of 4."), "no-oaat-header"))
+        self.assertFalse(passes(case_for(TANGENT, flag + "\n**Item 2 of 4, decision: Hosting**"), "no-oaat-header"))
+
+    def test_a_header_between_the_start_of_the_flag_and_a_later_continue_or_refocus_is_not_erased(self):
+        # the flag pattern has no DOTALL and no loose span: only the exact sentence is exempt
+        on_two_lines = "This may be a tangent from the hosting choice.\n**Item 2 of 4, decision: Hosting**\nContinue or refocus?"
+        same_line = "This may be a tangent from the hosting choice. **Item 2 of 4, decision: Hosting** Continue or refocus?"
+        spanning = "This may be a tangent from x\n**Item 2 of 4, risk: Backups**\ncontinue or refocus?"
+        for name, reply in (("two lines", on_two_lines), ("same line", same_line), ("loose span", spanning)):
+            with self.subTest(name):
+                self.assertFalse(passes(case_for(TANGENT, reply), "no-oaat-header"))
+                self.assertFalse(passes(case_for(TANGENT, reply), "tangent-flag"))
+        wrapup = "**Decided:** none.\n**Parked:** hosting.\n**Next action:** " + spanning
+        self.assertFalse(passes(case_for(STOP, wrapup), "no-oaat-header"))
 
     def test_a_tangent_reply_asks_one_question(self):
         good = "This may be a tangent from the database decision. Continue or refocus?"
@@ -218,7 +231,7 @@ class RunChecksTests(unittest.TestCase):
     def test_the_good_reply_passes_every_check_that_applies(self):
         results = checks.run_checks(case_for(ITEM, GOOD_ITEM))
         self.assertEqual([cid for cid, ok, _ in results if not ok], [])
-        self.assertEqual(len(results), 17)   # 16 before the tool path + no-tool-search
+        self.assertEqual(len(results), 18)   # 16 before the tool path + no-tool-search + tool-denied-fallback
 
     def test_each_result_is_an_id_a_boolean_and_a_note(self):
         for cid, ok, note in checks.run_checks(case_for(ITEM, "nothing useful")):

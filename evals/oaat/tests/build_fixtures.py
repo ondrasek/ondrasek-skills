@@ -14,12 +14,16 @@ A follow-up row has two turns, as in a real session (a `reply` in evals/prompts.
 first message, which loads the skill and shows item 1, then the answer to the user's second message.
     negative-list      the skill triggers on a request for a full list (a false positive)
 
-A third set, `tool/`, holds two INVENTED traces of the tool path (an item presented with the AskUserQuestion tool). They exist because a
-headless `claude -p` run cannot call that tool (measured), so the tool path can only be graded offline; the event shape is the assumed,
-UNCONFIRMED standard one (README, "The tool path (AskUserQuestion)"):
+A third set, `tool/`, holds two INVENTED traces of the tool path (items presented with the AskUserQuestion tool). They exist because a
+headless `claude -p` run cannot call that tool (measured), so the tool path can only be graded offline. The INPUT of the tool is
+documented (code.claude.com/docs/en/agent-sdk/user-input); the tool_result envelope is the assumed standard one, UNCONFIRMED (README,
+"The tool path (AskUserQuestion)"). Each trace is ONE turn: an interactive walk-through pauses at every call and the answer returns as
+the tool_result in the same turn, so a skip is the tool_result `Skip for now` and never a new prompt:
 
-    explicit-dollar    the count line, then one AskUserQuestion call for item 1
-    followup-skip      turn 1 as above, turn 2 (after "skip") a call for item 2 and no text at all
+    explicit-dollar    count line + call 1, answer a label, one plain line + call 2, `Skip for now`, one plain line + call 3, free text
+                       `stop`, then the wrap-up
+    followup-skip      call 1 skipped, call 2 answered with a free-text question, one plain line + call 2 again, a label, call 3,
+                       free text `stop`, then the wrap-up (every call is answered before the next one is made)
 
 Run `python3 tests/build_fixtures.py` to rewrite the files; a test checks that the committed files equal this output.
 """
@@ -168,27 +172,57 @@ TOOL_SECOND = tool_input(
     2, 5, "question", "Confirm the launch date", "Marketing needs a date by Friday.", "The announcement plan waits for it.",
     "Which launch date should marketing get?",
     [("Friday the 14th (Recommended)", "Matches the audit plan; leaves a week of slack."), ("The following Monday", "More slack, later announcement.")])
-TOOL = {"explicit-dollar": [("5 items need you. First one:", TOOL_FIRST)],
-        "followup-skip": [("5 items need you. First one:", TOOL_FIRST), ("", TOOL_SECOND)]}
+COUNT = "5 items need you. First one:"
+TOOL_THIRD = tool_input(
+    3, 5, "risk", "Assign the security review", "Nobody owns the external audit yet.", "An audit without an owner can slip past the launch date.",
+    "Who should own the security review?",
+    [("Assign it to one engineer (Recommended)", "Fast; one person carries it."), ("Book an outside firm", "Independent, slower.")])
+SKIP_ANSWER = "Skip for now"
+# one turn each: a message is a list of blocks (a str is text, a (call input, tool_result content) pair is an AskUserQuestion call and its answer)
+TOOL = {
+    "explicit-dollar": [
+        [COUNT, (TOOL_FIRST, "Postgres (Recommended)")],
+        ["Noted: Postgres for the first release.", (TOOL_SECOND, SKIP_ANSWER)],
+        ["Parked.", (TOOL_THIRD, "stop")],
+        ["\n".join(["**Decided:** Postgres for the first release.", "**Parked:** Confirm the launch date.",
+                    "**Next action:** Assign the security review, it has no owner yet."])]],
+    "followup-skip": [
+        [COUNT, (TOOL_FIRST, SKIP_ANSWER)],
+        ["Parked for later.", (TOOL_SECOND, "Which date does marketing prefer?")],
+        ["Marketing wants an answer by Friday, and the 14th leaves a week of slack.", (TOOL_SECOND, "Friday the 14th (Recommended)")],
+        ["Noted: Friday the 14th.", (TOOL_THIRD, "stop")],
+        ["\n".join(["**Decided:** Friday the 14th for the launch.", "**Parked:** Pick the database.",
+                    "**Next action:** Assign the security review, it has no owner yet."])]],
+}
 
 
-def tool_events(prompt_id, text, tool_input, call_skill, index):
-    """One INVENTED turn on the tool path: the optional count line and one AskUserQuestion call, then the result event."""
+def tool_walk(prompt_id, messages, index):
+    """One INVENTED turn of an interactive walk on the tool path: the Skill call, then every message with its tool_results, the result event."""
     session = f"INVENTED-tool-{prompt_id}"
     out = [{"type": "system", "subtype": "init", "session_id": session, "cwd": "/invented/fixture", "model": "invented-model",
-            "claude_code_version": "INVENTED", "tools": ["Skill", "AskUserQuestion"], "skills": SKILLS, "plugins": [], "mcp_servers": []}]
-    if call_skill:
-        out.append({"type": "assistant", "parent_tool_use_id": None, "session_id": session,
-                    "message": {"role": "assistant", "content": [{"type": "tool_use", "id": f"toolu_INVENTED_{index}", "name": "Skill",
-                                                                  "input": {"skill": "oaat:oaat"}}]}})
-        out.append({"type": "user", "parent_tool_use_id": None, "session_id": session,
-                    "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"toolu_INVENTED_{index}",
-                                                             "content": "INVENTED tool result"}]}})
-    content = ([{"type": "text", "text": text}] if text else []) + [
-        {"type": "tool_use", "id": f"toolu_INVENTED_Q{index}", "name": "AskUserQuestion", "input": tool_input}]
-    out.append({"type": "assistant", "parent_tool_use_id": None, "session_id": session, "message": {"role": "assistant", "content": content}})
-    out.append({"type": "result", "subtype": "success", "is_error": False, "session_id": session, "result": text,
-                "num_turns": 2 if call_skill else 1, "duration_ms": 3000 + 100 * index, "total_cost_usd": round(0.01 + 0.001 * index, 4),
+            "claude_code_version": "INVENTED", "tools": ["Skill", "AskUserQuestion"], "skills": SKILLS, "plugins": [], "mcp_servers": []},
+           {"type": "assistant", "parent_tool_use_id": None, "session_id": session,
+            "message": {"role": "assistant", "content": [{"type": "tool_use", "id": f"toolu_INVENTED_{index}", "name": "Skill", "input": {"skill": "oaat:oaat"}}]}},
+           {"type": "user", "parent_tool_use_id": None, "session_id": session,
+            "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"toolu_INVENTED_{index}", "content": "INVENTED tool result"}]}}]
+    serial, last_text = 0, ""
+    for blocks in messages:
+        content, results, last_text = [], [], ""
+        for block in blocks:
+            if isinstance(block, str):
+                content.append({"type": "text", "text": block})
+                last_text = block
+            else:
+                tool_input_, answer = block
+                tool_id = f"toolu_INVENTED_Q{index}_{serial}"
+                serial += 1
+                content.append({"type": "tool_use", "id": tool_id, "name": "AskUserQuestion", "input": tool_input_})
+                results.append({"type": "tool_result", "tool_use_id": tool_id, "content": answer})
+        out.append({"type": "assistant", "parent_tool_use_id": None, "session_id": session, "message": {"role": "assistant", "content": content}})
+        if results:
+            out.append({"type": "user", "parent_tool_use_id": None, "session_id": session, "message": {"role": "user", "content": results}})
+    out.append({"type": "result", "subtype": "success", "is_error": False, "session_id": session, "result": last_text,
+                "num_turns": 1 + len(messages), "duration_ms": 9000 + 100 * index, "total_cost_usd": round(0.02 + 0.001 * index, 4),
                 "stop_reason": "end_turn"})
     return out
 
@@ -200,8 +234,8 @@ def build():
         files[("after", prompt_id)] = turns(prompt_id, AFTER[prompt_id], prompt_id not in NO_SKILL, index)
         before_calls = (prompt_id not in NO_SKILL and prompt_id != "implicit-walk") or prompt_id in SKILL_CALLED_BEFORE
         files[("before", prompt_id)] = turns(prompt_id, BEFORE[prompt_id], before_calls, index)
-    for index, (prompt_id, steps) in enumerate(TOOL.items(), start=1):
-        files[("tool", prompt_id)] = [e for n, (text, tool_input_) in enumerate(steps) for e in tool_events(prompt_id, text, tool_input_, n == 0, index)]
+    for index, (prompt_id, messages) in enumerate(TOOL.items(), start=1):
+        files[("tool", prompt_id)] = tool_walk(prompt_id, messages, index)
     return {key: "".join(json.dumps(e, sort_keys=True) + "\n" for e in value) for key, value in files.items()}
 
 
