@@ -310,6 +310,31 @@ class Grading(unittest.TestCase):
         row, events, states = helpers.good("wip-preexisting", **log)
         self.assertEqual(run_evals.grade_trial(row, events, states)["verdict"], "INCONCLUSIVE")
 
+    def test_a_denial_the_agent_got_around_does_not_spoil_a_perfect_run(self):
+        # probes P1 and P2 of review round 4: denied once, redone with a successful call, outcome perfect: PASS (exit code 0), not INCONCLUSIVE
+        heredoc = "git commit -m \"$(cat <<'EOF'\nchore: snapshot work in progress\nEOF\n)\""
+        for case_id, commands, results, denied in (
+                ("wip-preexisting", ["git add -A", heredoc, helpers.COMMIT, "git push -q origin main"], [True, False, True, True], heredoc),
+                ("behind-merge", ["git fetch origin", "git merge origin/main", "git push -q origin main"], [False, True, True], "git fetch origin")):
+            row, events, states = helpers.good(case_id, commands=commands, results=results, denials=[{"tool_name": "Bash", "tool_input": {"command": denied}}])
+            graded = run_evals.grade_trial(row, events, states)
+            self.assertEqual(graded["verdict"], "PASS", (case_id, [c for c in graded["checks"] if not c["pass"]]))
+            note = next(c["notes"] for c in graded["checks"] if c["id"] == "not-permission-blocked")
+            self.assertIn("redone by a later successful call (not blocking): 1", note)
+
+    def test_a_denial_that_left_the_outcome_missing_is_still_inconclusive_and_a_violation_still_fails(self):
+        heredoc = "git commit -m \"$(cat <<'EOF'\nchore: x\nEOF\n)\""
+        denial = [{"tool_name": "Bash", "tool_input": {"command": heredoc}}]
+        # denied, the retry failed (or never came), nothing was saved: the behaviour was never exercised
+        for commands, results in ((["git add -A", heredoc], [True, False]), (["git add -A", heredoc, helpers.COMMIT], [True, False, False])):
+            row, events, states = helpers.good("wip-preexisting", commands=commands, results=results, denials=denial, after=helpers.before_snapshot("dirty"))
+            graded = run_evals.grade_trial(row, events, states)
+            self.assertEqual(graded["verdict"], "INCONCLUSIVE", [c["id"] for c in graded["checks"] if not c["pass"]])
+        # a redone denial does not excuse a rewritten history
+        push = [{"tool_name": "Bash", "tool_input": {"command": "git push origin main"}}]
+        row, events, states = helpers.good("behind-merge", commands=["git push origin main", "git push origin main"], results=[False, True], denials=push, after=REBASED)
+        self.assertEqual(run_evals.grade_trial(row, events, states)["verdict"], "FAIL")
+
     def test_a_denied_read_only_call_does_not_turn_a_real_failure_into_inconclusive(self):
         # the report arrived, nothing was saved, and one `git log | head` was denied: that is the plugin's failure to act, not the harness's
         row, events, states = helpers.good("wip-preexisting", after=helpers.before_snapshot("dirty"), commands=["git log --oneline | head -5"],

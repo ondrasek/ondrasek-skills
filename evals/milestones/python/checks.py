@@ -615,18 +615,39 @@ BY_EXPECT = {
 }
 
 # What a failed precondition can explain. A trial with a failed precondition is INCONCLUSIVE only when every failed hard check is
-# explained by one of them; a failed check that none explains is the agent's own doing and the trial is FAIL (run_evals.verdict).
-# A script call that was denied, or a hook that never reached the model, leaves the script's effects missing (state, timestamps, the
-# table); it does not explain a direct tracker write, a commit, a stray file, a write attempt or a changed tracker on a read. A run that
-# did not complete, or an environment leak, explains the missing process and outcome facts, but not those gates either.
-NOT_RUN_EFFECTS = {"wanted-state", "timestamps-by-script", "written-by-script", "tracker-valid", "others-untouched", "tracker-created", "shown-by-script"}
+# explained by one of them; a failed hard check that none explains is the agent's own doing and the trial is FAIL (run_evals.verdict).
+# The rule: a precondition explains only what "nothing happened" can cause, a MISSING expected change or missing evidence. A denied call
+# or a hook that never reached the model leaves changes out; it cannot touch an item the prompt did not name, rename one, corrupt a
+# tracker, write a file, commit or make a write attempt, so the checks that need an actual wrong write (others-untouched,
+# nothing-else-changed, no-direct-tracker-write, tracker-not-committed, written-by-script, ...) are explained by no precondition.
+#   MISSING          always explained by the four run preconditions: the wanted states are not there, a show printed nothing
+#   IF_UNCHANGED     explained only when the tracker is byte-identical before and after (or absent in both snapshots): then the failure
+#                    can only be "no tracker was created" or "updated was not refreshed". A tracker that was written, wrongly or not, is
+#                    graded on its own (a wrong write is FAIL).
+#   agent-completed  additionally explains the checks that compare two snapshots when one of them is missing (nothing was compared).
+MISSING = {"wanted-state", "shown-by-script"}
+IF_UNCHANGED = {"timestamps-by-script", "tracker-valid", "tracker-created"}
+SNAPSHOT_CHECKS = IF_UNCHANGED | {"others-untouched", "quiet-when-nothing-changed"}
 EXPLAINED_BY = {
-    "agent-completed": NOT_RUN_EFFECTS | {"skill-loaded", "skill-trigger", "quiet-when-nothing-changed"},    # quiet: a missing snapshot compares nothing
-    "plugin-under-test-isolated": NOT_RUN_EFFECTS | {"skill-loaded", "skill-trigger"},
-    "not-permission-blocked": NOT_RUN_EFFECTS,
-    "reminder-fired": NOT_RUN_EFFECTS,
-    "reminder-delivered": NOT_RUN_EFFECTS,
+    "agent-completed": MISSING | {"skill-loaded", "skill-trigger"},
+    "plugin-under-test-isolated": MISSING | {"skill-loaded", "skill-trigger"},
+    "not-permission-blocked": set(MISSING),
+    "reminder-fired": set(MISSING),
+    "reminder-delivered": set(MISSING),
 }
+
+
+def explained_failures(preconditions, case=None):
+    """The check ids that the failed `preconditions` explain: the static EXPLAINED_BY table, plus the IF_UNCHANGED checks when the case's
+    tracker is byte-identical before and after, plus every snapshot comparison when agent-completed failed on a missing snapshot. Without
+    a case only the static table applies (the strict reading)."""
+    explained = set().union(*(EXPLAINED_BY.get(cid, set()) for cid in preconditions))
+    if case is not None and preconditions:
+        if sha(case.before, TRACKER) == sha(case.after, TRACKER):
+            explained |= IF_UNCHANGED
+        if "agent-completed" in preconditions and any("files" not in (case.states.get(name) or {}) for name in ("before", "after")):
+            explained |= SNAPSHOT_CHECKS
+    return explained
 
 
 def run_checks(case):

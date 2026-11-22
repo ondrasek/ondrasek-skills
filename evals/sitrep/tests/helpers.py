@@ -92,11 +92,12 @@ FIXTURE_OF = {"none": "bare", "feedback": "open-items", "report": "open-items", 
 
 def good(expect, plugins=("sitrep",), skills=(SKILL,), calls1=None, calls2=None, reply1=None, denials=(), data=None, index=TEMPLATE,
          extra_files=None, report_dir=DIR, report_found=True, report_patch=None, after1_extra=None, tmp_sitrep=None, report2_exists=False,
-         should_trigger=True, result_subtype="success", plugin_path=PLUGIN, omit_data=False, result2_subtype="success", denials2=(), turn2=True):
+         should_trigger=True, result_subtype="success", plugin_path=PLUGIN, omit_data=False, result2_subtype="success", denials2=(), turn2=True, drop_state=()):
     """A passing run for `expect`. `data` is a dict (written as data.js) or raw text; `report_patch` overrides fields of the report record;
     `result_subtype` other than success ends turn 1 with an error result; `plugin_path` is where init says the plugin is (the run's
     --plugin-dir is PLUGIN); `omit_data` leaves data.js out of the report directory. For `report-clean`: `result2_subtype` and `denials2`
-    belong to the second turn's result event, and `turn2=False` leaves the second turn out (no events, no snapshot after it)."""
+    belong to the second turn's result event, and `turn2=False` leaves the second turn out (no events, no snapshot after it).
+    `drop_state` names state entries that were never recorded (before, after1, after2, tmp_sitrep, report1, ...): they are set to None."""
     row = cases.Row(f"t-{expect}", expect != "none" and should_trigger, "explicit", FIXTURE_OF[expect], expect, "p", "done" if expect == "report-clean" else "")
     has_report = expect.startswith("report")
     if calls1 is None:
@@ -119,6 +120,8 @@ def good(expect, plugins=("sitrep",), skills=(SKILL,), calls1=None, calls2=None,
     if expect == "report-clean" and turn2:
         states["after2"] = state.snapshot_from(original, head="h1")
         states["report2"] = state.report_record(report_dir, contents if report2_exists else None, TEMPLATE_SHA)
+    for name in drop_state:
+        states[name] = None
     return row, events, states
 
 

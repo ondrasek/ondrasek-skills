@@ -12,7 +12,9 @@ The environment gets EVAL_PROMPT_ID, EVAL_TRIAL, EVAL_TURN, TMPDIR and GIT_CONFI
 trace, saved as artifacts/<id>.jsonl; the snapshots (workspace before and after each turn, the report directory after each turn) are
 saved as artifacts/<id>.state.json together with the runner's note (non-zero exit, timeout, missing session id) as `run_note`. The root is deleted after the last snapshot unless --keep is given.
 A trial is PASS, FAIL or INCONCLUSIVE (a precondition failed: the behaviour was never exercised; see checks.verdict).
-A run that did not finish (non-zero exit, timeout, no success result event) is INCONCLUSIVE too (check run-completed).
+A run that did not finish (non-zero exit, timeout, no success result event) is INCONCLUSIVE too (check run-completed), and so is a
+case graded with --fixtures that has no recorded trace or no state snapshots (a missing .state.json, check state-recorded): nothing was
+measured, so it says nothing about the skill.
 Advisory (soft) checks, which only match words in text the model wrote, are listed as WARN with their note: they never change the
 verdict or the exit code, so a trial that fails only those is a PASS with warnings.
 The exit code is 0 when every trial passes, 1 when a trial fails or is inconclusive, 2 when a run cannot start.
@@ -52,14 +54,22 @@ def trace_path(directory, row_id, trial, trials, suffix="jsonl"):
     return Path(directory) / (f"{row_id}.{suffix}" if trials == 1 else f"{row_id}.{trial}.{suffix}")
 
 
+def read_states(path):
+    """The state record at `path`, {} when the file is missing or unreadable: `state-recorded` then fails and the trial is INCONCLUSIVE."""
+    try:
+        states = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return states if isinstance(states, dict) else {}
+
+
 def recorded(directory, row_id, trial):
-    """(events, states) of a recorded run in `directory`, or None when its trace is missing."""
+    """(events, states) of a recorded run in `directory`, or None when its trace is missing (a trace without its state file gives {})."""
     for stem in (f"{row_id}.{trial}", row_id):
         path = Path(directory) / f"{stem}.jsonl"
         if path.is_file():
             states_path = Path(directory) / f"{stem}.state.json"
-            states = json.loads(states_path.read_text(encoding="utf-8")) if states_path.is_file() else {}
-            return trace.load(path), states
+            return trace.load(path), read_states(states_path)
     return None
 
 

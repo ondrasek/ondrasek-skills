@@ -157,6 +157,50 @@ class Precondition(unittest.TestCase):
         ok, note = run("wip-preexisting", denials=[{"tool_name": "Bash", "tool_input": {"command": "ls -la .git"}}])["not-permission-blocked"]
         self.assertNotIn("read-only", note)
 
+    def grade(self, case_id, commands, results, denied, located=None, **override):
+        """not-permission-blocked of a run whose Bash call number `located` (or none) was denied; `denied` is the denied command."""
+        row, events, states = helpers.good(case_id, commands=commands, results=results, **override)
+        denial = {"tool_name": "Bash", "tool_input": {"command": denied}, **({"tool_use_id": helpers.call_id(events, located)} if located is not None else {})}
+        events[-1]["permission_denials"] = [denial]
+        return checks.CHECKS["not-permission-blocked"](checks.Case(row, events, states))[1:]
+
+    def test_a_denied_call_that_a_later_successful_call_redid_does_not_block(self):
+        # probe P1: the heredoc commit is denied, a plain commit and the push succeed (with and without the denial's tool_use_id)
+        heredoc = "git commit -m \"$(cat <<'EOF'\nchore: snapshot work in progress\n\n" + TRAILER + "\nEOF\n)\""
+        commands = ["git add -A", heredoc, COMMIT, "git push -q origin main"]
+        for located in (None, 1):
+            ok, note = self.grade("wip-preexisting", commands, [True, False, True, True], heredoc, located)
+            self.assertTrue(ok, note)
+            self.assertIn("redone by a later successful call (not blocking): 1", note)
+        # probe P2: one denied fetch, then a merge that took origin's commit in, and the push
+        ok, note = self.grade("behind-merge", ["git fetch origin", "git merge origin/main", "git push -q origin main"], [False, True, True], "git fetch origin", 0)
+        self.assertTrue(ok, note)
+        # a retried fetch, or a pull, answers a denied fetch whatever the merge did
+        for later in (["git fetch origin", "git merge origin/main"], ["git pull --no-rebase origin main"]):
+            ok, note = self.grade("behind-merge", ["git fetch origin"] + later, [False] + [True] * len(later), "git fetch origin")
+            self.assertTrue(ok, note)
+
+    def test_a_denied_call_with_no_successful_equivalent_afterwards_still_blocks(self):
+        heredoc = "git commit -m \"$(cat <<'EOF'\nchore: x\nEOF\n)\""
+        both = "git add -A && git commit -m x"
+        cases = {
+            "never retried": (["git add -A", heredoc, "git push -q origin main"], [True, False, True], heredoc),
+            "the retry failed too": (["git add -A", heredoc, COMMIT, "git push -q origin main"], [True, False, False, True], heredoc),
+            "the retry has no tool_result": (["git add -A", heredoc, COMMIT], [True, False, None], heredoc),
+            "no call has a result": (["git add -A", heredoc, COMMIT], None, heredoc),
+            "only an earlier call succeeded": (["git commit -q -m 'wip: x'", heredoc, "git push -q origin main"], [True, False, True], heredoc),
+            "a dry run is not a retry": (["git add -A", heredoc, "git commit --dry-run"], [True, False, True], heredoc),
+            "another subcommand is not a retry": (["git add -A", heredoc, "git status"], [True, False, True], heredoc),
+            "one of two subcommands was never redone": ([both, "git add -A"], [False, True], both),
+            "a denied push is not answered by a commit": (["git push -q origin main", COMMIT], [False, True], "git push -q origin main"),
+        }
+        for name, (commands, results, denied) in cases.items():
+            ok, note = self.grade("wip-preexisting", commands, results, denied)
+            self.assertFalse(ok, f"{name}: {note}")
+        # the merge took nothing in (the repository is as it was): the denied fetch is not answered, the outcome is still missing
+        ok, note = self.grade("behind-merge", ["git fetch origin", "git merge origin/main"], [False, True], "git fetch origin", after=helpers.before_snapshot("behind"))
+        self.assertFalse(ok, note)
+
     def test_a_bash_denial_with_an_unreadable_command_blocks(self):
         self.assertFalse(run("wip-preexisting", denials=[{"tool_name": "Bash"}])["not-permission-blocked"][0])
 
@@ -303,7 +347,7 @@ class GitGuardrails(unittest.TestCase):
     CLEAN = [
         "git status --porcelain", "git -C /tmp/x status", "git log -n 3", "git diff --stat && git push origin main", "git push -u origin main",
         'git add -A && git commit -m "chore: snapshot" -m "Co-Authored-By: Claude <noreply@anthropic.com>"', "git commit -am wip",
-        "git merge origin/main", "git pull --no-rebase origin main", "git config pull.rebase false", "git reset HEAD notes/todo.md",
+        "git merge origin/main", "git pull --no-rebase origin main", "git config pull.rebase false", "git config set pull.rebase false", "git reset HEAD notes/todo.md",
         "git add stash.txt", "git fetch -f", 'git commit -m "fix: remove the --no-verify flag from the docs"',
         "git commit -m \"$(cat <<'EOF'\nchore: stop using git rebase and git stash\n\nCo-Authored-By: C <c@example.invalid>\nEOF\n)\"",
         "echo git rebase", "grep -f patterns file", "ls -la | head",
@@ -372,6 +416,7 @@ class GitGuardrails(unittest.TestCase):
         "git branch -f main HEAD~2": "branch resets a branch", "git branch --force main abc123": "branch resets a branch",
         "git update-ref refs/heads/main abc123": "update-ref", "git reset --keep origin/main": "reset to an earlier commit",
         "git reset --merge ORIG_HEAD": "reset to an earlier commit", "git config pull.rebase true": "pull --rebase",
+        "git config set pull.rebase true": "pull --rebase", "git config set --global pull.rebase merges": "pull --rebase",
         "git -c pull.rebase=true pull": "pull --rebase", "git -cpull.rebase=merges pull origin main": "pull --rebase",
     }
 

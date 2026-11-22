@@ -9,6 +9,8 @@ Each override breaks one thing, so a test can show that a given check fails (see
     init_kwargs  extra arguments of init() (source, path); result_kwargs  of result() (subtype, is_error); no_result  drop the result event
     after        snapshot fields that replace the good run's (head, status, log, tracked, origin, remotes, ...)
     files_add, files_drop                files added to / removed from the after snapshot
+    results      None (default: the trace has no tool_result events) | a list with one bool per command (True: the call succeeded,
+                 False: its tool_result is an error, as a denied call's is; None: no tool_result at all) | True for every command succeeding
 
 The trace shapes are modelled on recorded traces (init, assistant tool_use, result). How a Stop-hook block shows up in a real
 trace is NOT known: the `fed` event below is an invented encoding, and checks only search it for the report's first words.
@@ -46,6 +48,13 @@ def init(plugins=(checks.PLUGIN,), errors=(), source="{}@inline", path=str(PLUGI
 def bash(command):
     block = {"type": "tool_use", "id": f"t{next(_ids)}", "name": "Bash", "input": {"command": command}}
     return {"type": "assistant", "parent_tool_use_id": None, "message": {"id": f"m{next(_ids)}", "content": [block]}}
+
+
+def tool_result(call_event, error=False):
+    """The user event that answers the tool_use of `call_event` (an event made by bash())."""
+    block = call_event["message"]["content"][0]
+    return {"type": "user", "parent_tool_use_id": None, "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": block["id"], "is_error": error, "content": "denied" if error else "ok"}]}}
 
 
 def hook_report():
@@ -113,7 +122,7 @@ def after_snapshot(row, before):
 
 
 def good(case_id, hook=None, commands=None, plugins=(checks.PLUGIN,), plugin_errors=(), denials=(), after=None, files_add=None, files_drop=(),
-         init_kwargs=None, result_kwargs=None, no_result=False):
+         init_kwargs=None, result_kwargs=None, no_result=False, results=None):
     row = ROWS[case_id]
     untouched = row.expect == "untouched"
     hook = hook or ("none" if untouched else "fed")
@@ -124,5 +133,14 @@ def good(case_id, hook=None, commands=None, plugins=(checks.PLUGIN,), plugin_err
     final["files"].update({p: state.entry(t.encode()) for p, t in (files_add or {}).items()})
     final.update(after or {})
     events = [init(plugins, plugin_errors, **(init_kwargs or {}))] + {"fed": [hook_report()], "event-only": [hook_event()], "none": []}[hook]
-    events += [bash(c) for c in commands] + ([] if no_result else [result(denials=denials, **(result_kwargs or {}))])
+    oks = [True] * len(commands) if results is True else results
+    for i, command in enumerate(commands):
+        call = bash(command)
+        events += [call] + ([tool_result(call, error=not oks[i])] if oks is not None and oks[i] is not None else [])
+    events += [] if no_result else [result(denials=denials, **(result_kwargs or {}))]
     return row, events, {"before": before, "after": final}
+
+
+def call_id(events, index):
+    """The tool_use id of the Bash call number `index` (0-based) of a trace: what a real denial entry carries as tool_use_id."""
+    return [e["message"]["content"][0]["id"] for e in events if e["type"] == "assistant"][index]

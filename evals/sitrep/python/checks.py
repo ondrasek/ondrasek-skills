@@ -5,7 +5,8 @@ Every check is a pure function of a `Case` and returns (id, passed, note); the n
 shows only the main conversation. Groups:
 
     precondition  was the behaviour exercised at all? A failure makes the trial INCONCLUSIVE, not FAIL (see `verdict`): the run did
-                  not finish (`run-completed`), a report.sh that was tried left no report directory, or a permission denial
+                  not finish (`run-completed`), the workspace snapshots were not recorded (`state-recorded`: a case never recorded, a
+                  trace without its .state.json), a report.sh that was tried left no report directory, or a permission denial
                   blocked report.sh or data.js, which says nothing about the skill (a plugin that did not load, or not the one under
                   test, `skill-loaded`, is treated the same way)
     process       did the skill load and trigger, and was the report made and removed by report.sh, not by hand?
@@ -58,7 +59,7 @@ NEGATIVE_WRITES_RE = re.compile(r"\.html?$|(^|/)data\.js$|sitrep", re.IGNORECASE
 
 GROUPS = {
     "skill-loaded": "process", "skill-trigger": "process", "created-by-script": "process", "cleaned-by-script": "process",
-    "run-completed": "precondition", "not-permission-blocked": "precondition", "report-located": "precondition",
+    "run-completed": "precondition", "state-recorded": "precondition", "not-permission-blocked": "precondition", "report-located": "precondition",
     "report-outside-project": "gate", "project-untouched": "gate", "index-untouched": "gate", "only-data-added": "gate",
     "tracker-untouched": "gate", "no-report-when-negative": "gate",
     "data-defines-sitrep": "outcome", "data-parses": "outcome", "data-valid": "outcome",
@@ -146,6 +147,15 @@ def workspace_chain(case):
     """The workspace snapshots in order: before, after turn 1 and, for a two-turn case, after turn 2 (None when one is missing)."""
     chain = [case.states.get("before"), case.states.get("after1")] + ([case.states.get("after2")] if case.row.reply else [])
     return chain if all(chain) else None
+
+
+def missing_snapshots(case):
+    """The recorded snapshots the case's checks compare that are absent: `before` and `after1` for every case, and the report-less
+    negative cases also need `tmp_sitrep` (the listing of the trial TMPDIR, [] when nothing was made). The one after turn 2 is not here:
+    it belongs to turn 2, and `run-completed` reports it per turn."""
+    names = ["before", "after1"] + (["tmp_sitrep"] if case.row.expect == "none" else [])
+    empty_is_recorded = {"tmp_sitrep"}      # [] is a real record (no report directory); an empty snapshot is not
+    return [name for name in names if case.states.get(name) is None or (not case.states[name] and name not in empty_is_recorded)]
 
 
 def problem_list(problems):
@@ -311,6 +321,14 @@ def run_completed(case):
     return "run-completed", not flat, "; ".join(flat) or f"{len(problems)} turn(s), each ended in a success result"
 
 
+def state_recorded(case):
+    """The state snapshots exist (see missing_snapshots). Nothing was measured without them, so a missing one is not a finding about the
+    skill: a case that was never recorded (`--fixtures` on a directory without it) or a trace without its .state.json is INCONCLUSIVE."""
+    missing = missing_snapshots(case)
+    return "state-recorded", not missing, ("the workspace snapshots needed are all recorded" if not missing else
+        f"not recorded: {missing} (a case never run or recorded, or a trace without its .state.json): nothing was measured, so this says nothing about the skill")
+
+
 def _strings(value):
     """Every string inside a JSON-like value."""
     if isinstance(value, str):
@@ -422,7 +440,7 @@ def project_untouched(case):
     project: the snapshots that exist are compared and `run-completed` reports the missing turn."""
     states = case.states
     if not states.get("before") or not states.get("after1"):
-        return "project-untouched", False, "the workspace snapshot before or after turn 1 is missing"
+        return "project-untouched", False, "the workspace snapshot before or after turn 1 is missing (not recorded: see state-recorded, which makes the trial INCONCLUSIVE)"
     chain = [states["before"], states["after1"]] + ([states["after2"]] if states.get("after2") else [])
     changes = [f"after turn {n}: {describe(diff)}" for n, diff in enumerate((diff_states(a, b) for a, b in zip(chain, chain[1:])), start=1) if any(diff)]
     missing = "; no snapshot after turn 2 (the second turn did not run: see run-completed)" if case.row.reply and not states.get("after2") else ""
@@ -621,9 +639,9 @@ def report_cleaned(case):
 
 # ---- which checks apply ------------------------------------------------------------------------------------
 
-NONE = [run_completed, skill_loaded, skill_trigger, no_report_when_negative]
-FEEDBACK = [run_completed, skill_loaded, skill_trigger, project_untouched]
-REPORT = [run_completed, skill_loaded, skill_trigger, not_permission_blocked, report_located, created_by_script, report_outside_project, project_untouched,
+NONE = [run_completed, state_recorded, skill_loaded, skill_trigger, no_report_when_negative]
+FEEDBACK = [run_completed, state_recorded, skill_loaded, skill_trigger, project_untouched]
+REPORT = [run_completed, state_recorded, skill_loaded, skill_trigger, not_permission_blocked, report_located, created_by_script, report_outside_project, project_untouched,
           index_untouched, only_data_added, data_defines_sitrep, data_parses, data_valid, items_cover_planted, dependency_recorded, dependency_direction,
           start_here_set, reply_hands_over]
 
@@ -643,25 +661,26 @@ def warnings(results):
 
 def _scope(case, failed):
     """Which turns are damaged: broken1 (turn 1 did not finish, a report.sh call or data.js write of it was denied, the report it tried to
-    make was not found, or the plugin under test did not load) and broken2 (turn 2 did not finish or had a denial)."""
+    make was not found, the plugin under test did not load, or the snapshots were not recorded) and broken2 (turn 2 did not finish or had a denial)."""
     problems, blocked = turn_problems(case), blocked_turns(case)
     return SimpleNamespace(
         problems=problems,
-        broken1=bool(problems[1]) or 1 in blocked or bool(failed & {"report-located", "skill-loaded"}),
+        broken1=bool(problems[1]) or 1 in blocked or bool(failed & {"report-located", "skill-loaded", "state-recorded"}),
         broken2=bool(problems.get(2)) or 2 in blocked)
 
 
 def _explained(case, cid, failed, scope):
     """Can the failed check `cid` follow from a failed precondition (True) or does it stand on its own (False)?
 
-    Standing on its own: something written into the project; an index.html that differs from the template (or is missing) in a report
+    Standing on its own: something written into the project (proven only by snapshots that exist: with `before` or `after1` not recorded
+    `project-untouched` is explained by `state-recorded`); an index.html that differs from the template (or is missing) in a report
     that report.sh made and the harness found; a skill that was called when it should not be, or not called when it should be (the
     last only when turn 1 finished); a report made in a negative case (a sitrep directory, a report.sh call, a report-like file; both
     of the last two only when the plugin loaded). Every other check reads what a turn left behind and is explained by that turn's
     damage: the checks of turn 1 by broken1, `cleaned-by-script` and `report-cleaned` by either turn."""
     loaded = "skill-loaded" not in failed
     if cid == "project-untouched":
-        return False
+        return bool(missing_snapshots(case))
     if cid == "index-untouched":
         return not (case.report.get("dir") and case.report.get("exists") and _ran_new(case))
     if cid == "skill-trigger":
@@ -680,7 +699,7 @@ def verdict(case, results):
 
     The advisory (soft) checks do not take part: a trial whose only failures are soft is a PASS, and the report lists them as warnings.
 
-    A failed precondition (the run did not finish, a tried report.sh left no report, a permission denial), or a plugin that did not load
+    A failed precondition (the run did not finish, the snapshots were not recorded, a tried report.sh left no report, a permission denial), or a plugin that did not load
     or is not the one under test (`skill-loaded`), means the behaviour was never exercised: INCONCLUSIVE, but only for the failures that
     can follow from it. The damage is scoped by turn (see _scope): a failure that the damaged turn does not explain stands, and then the
     trial is a FAIL, e.g. a data.js without dependencies after a turn 1 that finished is a finding although turn 2 crashed. Failures that

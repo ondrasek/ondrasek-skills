@@ -82,6 +82,7 @@ UNPARSED = {"data-valid", "items-cover-planted", "dependency-recorded", "depende
 # set must be empty: a mutation that breaks another check by accident is a bug in the mutation
 MUTATIONS = {
     "run-completed": ("none", dict(result_subtype="error_max_budget_usd"), set()),
+    "state-recorded": ("feedback", dict(drop_state=("before",)), {"project-untouched"}),
     "skill-loaded": ("report", dict(skills=()), set()),
     "skill-trigger": ("none", dict(calls1=[("Skill", {"skill": SKILL})], should_trigger=False), set()),
     "not-permission-blocked": ("report", dict(denials=[{"tool_name": "Write", "tool_input": {"file_path": DIR + "/data.js"}}]), set()),
@@ -145,6 +146,10 @@ MORE_MUTATIONS = [
     ("a sentence per item in the reply, with an abbreviation in the middle", "reply-hands-over", "report",
      dict(reply1=GOOD_REPLY + " Postgres vs. SQLite is open. The SSO vendor, e.g. Okta, is open. The licence audit is open. Retention is open. The migration waits."), set()),
     ("the report cleaned in the turn that made it", "created-by-script", "report", dict(calls1=EARLY_CLEAN, report_patch=GONE), NO_REPORT - {"created-by-script", "report-outside-project", "reply-hands-over"}),
+    ("report.sh new, then a directory made inside `bash -lc '...'` (combined short flags)", "created-by-script", "report",
+     dict(calls1=REPORT_CALLS + [("Bash", {"command": "bash -lc 'mkdir -p /r/tmp/x'"}, "")]), set()),
+    ("report.sh new, then a removal inside `bash -ec '...'` in turn 2 instead of clean", "cleaned-by-script", "report-clean",
+     dict(calls2=[("Bash", {"command": f"bash -ec 'rm -rf {DIR}'"}, "")]), set()),
     ("a refused clean followed by rm on a sitrep.* glob", "cleaned-by-script", "report-clean", dict(calls2=REFUSED_CLEAN), set()),
     ("a clean call the script refused", "cleaned-by-script", "report-clean", dict(calls2=REFUSED_CLEAN[:1]), set()),
     ("the compound `clean || /bin/rm -rf`", "cleaned-by-script", "report-clean", dict(calls2=[("Bash", {"command": f"{SCRIPT_Q} clean {DIR} || /bin/rm -rf {DIR}"}, "")]), set()),
@@ -257,7 +262,7 @@ class Verdict(unittest.TestCase):
         self.assertEqual(self.verdict("feedback", skills=(), after1_extra={"notes.md": "x"}), "FAIL")
 
     def test_groups(self):
-        self.assertEqual(sorted(cid for cid, g in checks.GROUPS.items() if g == "precondition"), ["not-permission-blocked", "report-located", "run-completed"])
+        self.assertEqual(sorted(cid for cid, g in checks.GROUPS.items() if g == "precondition"), ["not-permission-blocked", "report-located", "run-completed", "state-recorded"])
         self.assertEqual(set(checks.GROUPS.values()), {"precondition", "process", "gate", "outcome", "soft"})
 
     def test_the_advisory_checks_are_the_ones_that_only_match_words_in_text_the_model_wrote(self):
@@ -877,6 +882,82 @@ class Coverage(unittest.TestCase):
     def test_an_item_matching_two_keys_is_assigned_to_the_free_one(self):
         data = with_items(migration={"detail": "Scripts differ between Postgres and SQLite."})
         self.assertTrue(passes("items-cover-planted", data=data))
+
+
+class MissingState(unittest.TestCase):
+    """State that was never recorded (a case that was not run, a trace without its .state.json) proves nothing about the skill: INCONCLUSIVE
+    in every case, never FAIL (round 4, R4-1). Facts read from the trace still stand."""
+
+    def case_without(self, expect, *names, **override):
+        row, events, states = helpers.good(expect, **override)
+        for name in names:
+            states[name] = None
+        return checks.Case.build(row, events, states)
+
+    def test_a_missing_before_or_after1_snapshot_is_inconclusive_for_every_case(self):
+        for expect in ALL_EXPECTS:
+            for name in ("before", "after1"):
+                with self.subTest(expect=expect, missing=name):
+                    case = self.case_without(expect, name)
+                    results = checks.run_checks(case)
+                    self.assertFalse({c: ok for c, ok, _ in results}["state-recorded"])
+                    self.assertEqual(judge_case(case), "INCONCLUSIVE")
+
+    def test_the_note_names_the_missing_snapshot(self):
+        case = self.case_without("report", "after1")
+        cid, ok, note = checks.state_recorded(case)
+        self.assertFalse(ok)
+        self.assertIn("after1", note)
+        self.assertIn("project-untouched", {c for c, ok, _ in checks.run_checks(case) if not ok})
+
+    def test_a_missing_snapshot_after_turn_two_is_inconclusive(self):
+        case = self.case_without("report-clean", "after2")
+        self.assertTrue(checks.state_recorded(case)[1])        # turn 2's snapshot is run-completed's, per turn
+        results = {c: ok for c, ok, _ in checks.run_checks(case)}
+        self.assertFalse(results["run-completed"])
+        self.assertEqual(judge_case(case), "INCONCLUSIVE")
+
+    def test_a_missing_tmp_listing_is_inconclusive_for_a_negative_case_only(self):
+        self.assertEqual(judge_case(self.case_without("none", "tmp_sitrep")), "INCONCLUSIVE")
+        self.assertTrue(checks.state_recorded(self.case_without("report", "tmp_sitrep"))[1])
+        self.assertTrue(checks.state_recorded(checks.Case.build(*helpers.good("none")))[1])    # [] (no report directory) is a record
+
+    def test_no_state_file_at_all_is_inconclusive_for_every_case(self):
+        for expect in ALL_EXPECTS:
+            with self.subTest(expect=expect):
+                row, events, _ = helpers.good(expect)
+                for states in ({}, None):
+                    case = checks.Case.build(row, events, states)
+                    self.assertEqual(judge_case(case), "INCONCLUSIVE")
+                    self.assertFalse({c: ok for c, ok, _ in checks.run_checks(case)}["state-recorded"])
+
+    def test_a_case_that_was_never_recorded_is_inconclusive_not_a_failure(self):
+        for expect in ALL_EXPECTS:
+            with self.subTest(expect=expect):
+                row, _, _ = helpers.good(expect)
+                self.assertEqual(judge_case(checks.Case.build(row, [], {}, "no recorded trace for x")), "INCONCLUSIVE")
+
+    def test_nothing_of_the_state_is_not_a_write_into_the_project(self):
+        case = self.case_without("feedback", "before", "after1")
+        results = {c: ok for c, ok, _ in checks.run_checks(case)}
+        self.assertEqual([c for c, ok in results.items() if not ok], ["state-recorded", "project-untouched"])
+        self.assertEqual(judge_case(case), "INCONCLUSIVE")
+
+    def test_a_write_into_the_project_still_fails_when_both_snapshots_exist(self):
+        self.assertEqual(judge("feedback", after1_extra={"notes.md": "x"}), "FAIL")
+
+    def test_what_the_trace_proves_stands_without_the_state(self):
+        # a skill that was called in a negative case, a report.sh call in a negative case, a skill that never ran in a positive case
+        row, events, states = helpers.good("none", calls1=[("Skill", {"skill": SKILL})])
+        self.assertEqual(judge_case(checks.Case.build(row, events, {})), "FAIL")
+        row, events, states = helpers.good("none", calls1=[("Bash", {"command": NEW}, DIR + "\n")])
+        self.assertEqual(judge_case(checks.Case.build(row, events, {})), "FAIL")
+        row, events, states = helpers.good("report", calls1=[], report_found=False)
+        self.assertEqual(judge_case(checks.Case.build(row, events, {})), "FAIL")
+
+    def test_a_crash_without_state_stays_inconclusive(self):
+        row, events, _ = helpers.good("report", result_subtype="error_max_budget_usd")
+        self.assertEqual(judge_case(checks.Case.build(row, events, {})), "INCONCLUSIVE")
 
 
 class Turns(unittest.TestCase):

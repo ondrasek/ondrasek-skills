@@ -2,7 +2,7 @@
 and not on text that merely mentions a command: `cat report.sh`, `grep mkdir notes.md` and `echo "rm -rf x"` run none of the three.
 
     commands(line)   [Command(name, args, path)] for every simple command of `line`: split at ; & && || | newline and parentheses,
-                     leading VAR=value words and wrappers (env, sudo, nohup, time, xargs ...) skipped, `sh -c STRING` and `eval STRING`
+                     leading VAR=value words and wrappers (env, sudo, nohup, time, xargs ...) skipped, `sh -c STRING` (also `-lc`, `-ec`) and `eval STRING`
                      parsed again, `bash script.sh args` read as a call of script.sh.
 
 A line that shlex cannot split (an unbalanced quote) yields no commands and `parsed` is False: callers decide what that means.
@@ -19,6 +19,8 @@ INTERPRETERS = SHELLS | {"python", "python3", "node", "perl", "ruby", "php"}
 WRAPPERS = {"env", "sudo", "command", "exec", "nohup", "time", "nice", "builtin", "stdbuf", "timeout", "xargs", "doas"}
 XARGS_WITH_VALUE = {"-I", "-n", "-L", "-P", "-s", "-E", "-d", "-a", "-i"}
 ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+SHELL_C_RE = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$")      # -c, but also the combined short flags -lc, -ec, -xec, -ic: the next argument is the command string
+INLINE_RE = re.compile(r"^-[A-Za-z]*[ce][A-Za-z]*$")    # python -c, node/perl/ruby -e (also -pe, -lne): the program is given inline, there is no script
 MAX_DEPTH = 4                               # nesting of `sh -c` and `eval`
 
 
@@ -80,17 +82,25 @@ def _strip(argv):
     return argv, via_xargs
 
 
+def _shell_string(args):
+    """Index of the command string of `sh -c STRING` in `args` (`-c` or a combined short flag such as `-lc`, after any other options), else None."""
+    flag = next((i for i, a in enumerate(args) if SHELL_C_RE.match(a)), None)
+    return flag + 1 if flag is not None and flag + 1 < len(args) else None
+
+
 def _one(argv, depth):
     argv, via_xargs = _strip(argv)
     if not argv:
         return []
     name = os.path.basename(argv[0])
     args = argv[1:]
-    if name in SHELLS and "-c" in args and args.index("-c") + 1 < len(args) and depth < MAX_DEPTH:
-        return _parsed(args[args.index("-c") + 1], depth + 1) or [Command(name, args, argv[0], via_xargs)]
+    string = _shell_string(args) if name in SHELLS else None
+    if string is not None and depth < MAX_DEPTH:
+        return _parsed(args[string], depth + 1) or [Command(name, args, argv[0], via_xargs)]
     if name == "eval" and depth < MAX_DEPTH:
         return _parsed(" ".join(args), depth + 1) or [Command(name, args, argv[0], via_xargs)]
-    if name in INTERPRETERS and "-c" not in args and "-e" not in args:
+    inline = any(SHELL_C_RE.match(a) for a in args) if name in SHELLS else any(INLINE_RE.match(a) for a in args)
+    if name in INTERPRETERS and not inline:
         script = next((i for i, a in enumerate(args) if not a.startswith("-")), None)
         if script is not None:
             return [Command(os.path.basename(args[script]), args[script + 1:], args[script], via_xargs)]

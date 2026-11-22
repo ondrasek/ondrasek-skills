@@ -57,6 +57,21 @@ def bash_commands(events):
     return commands
 
 
+def bash_calls(events):
+    """[(tool_use id, command, succeeded)] of every Bash call of the main conversation, in order.
+
+    `succeeded` is True only when a tool_result block with the call's id exists and does not carry is_error: a call without a result
+    in the trace (cut off, or a trace that omits results) is not known to have worked, and a denied call's result is an error.
+    """
+    failed = {}
+    for event in events:
+        if event.get("type") == "user":
+            for block in trace.blocks(event):
+                if block.get("type") == "tool_result" and block.get("tool_use_id") is not None:
+                    failed[str(block["tool_use_id"])] = bool(block.get("is_error"))
+    return [(call_id, command, call_id in failed and not failed[call_id]) for call_id, command in bash_commands(events)]
+
+
 def fed_to_model(events, needle):
     """True when `needle` occurs in a block of a user event that is not a tool result: the hook's stderr reached the conversation.
 

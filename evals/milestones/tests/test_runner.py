@@ -215,7 +215,11 @@ class Verdict(unittest.TestCase):
 
     def test_a_failed_precondition_masks_only_what_it_explains(self):
         # the denial explains the missing outcome, not the agent's own direct write or a changed file
-        self.assertEqual(run_evals.verdict(self.results("not-permission-blocked", "wanted-state", "tracker-valid")), "INCONCLUSIVE")
+        self.assertEqual(run_evals.verdict(self.results("not-permission-blocked", "wanted-state", "shown-by-script")), "INCONCLUSIVE")
+        # a denial leaves changes out: it never explains an item that changed, a bad tracker or a write by other means (R4-1)
+        for explained_by in ("not-permission-blocked", "reminder-fired", "reminder-delivered", "plugin-under-test-isolated"):
+            for wrong in ("others-untouched", "tracker-valid", "tracker-created", "timestamps-by-script", "written-by-script", "quiet-when-nothing-changed"):
+                self.assertEqual(run_evals.verdict(self.results(explained_by, "wanted-state", wrong)), "FAIL", (explained_by, wrong))
         self.assertEqual(run_evals.verdict(self.results("not-permission-blocked", "no-direct-tracker-write", "tracker-valid")), "FAIL")
         self.assertEqual(run_evals.verdict(self.results("reminder-fired", "no-direct-tracker-write", "written-by-script", "timestamps-by-script")), "FAIL")
         self.assertEqual(run_evals.verdict(self.results("agent-completed", "nothing-else-changed")), "FAIL")

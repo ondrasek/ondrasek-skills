@@ -730,6 +730,97 @@ class VerdictAttribution(unittest.TestCase):
                 self.assertNotIn(gate, explained, cid)
 
 
+class ExplanationIsOnlyMissingEffects(unittest.TestCase):
+    """R4-1: a denied call or a hook that never fired leaves changes OUT. It cannot rename or change an item the prompt did not name,
+    corrupt a tracker or write a file, so such a failure is the agent's own doing: FAIL, never INCONCLUSIVE."""
+
+    SET_4_DONE = f'python3 "{helpers.SCRIPT}" set 4 --state done'
+    DENIED_TEXT = "Claude requested permissions to use Bash, but you haven't granted it yet."
+
+    def denied_set_2(self, after_tracker, calls, expect="update", **override):
+        """SET_2_DONE is denied (an element with its id, an is_error result); the other `calls` run."""
+        denial = {"tool_name": "Bash", "tool_use_id": "d1", "tool_input": {"command": SET_2_DONE}}
+        row, events, states = helpers.good(expect, calls=calls, denials=[denial], after_tracker=after_tracker, **override)
+        denied = helpers.call("Bash", command=SET_2_DONE)
+        denied["message"]["content"][0]["id"] = "d1"
+        events.insert(2, denied)
+        events.insert(3, helpers.tool_result("d1", self.DENIED_TEXT, is_error=True))
+        trial = run_evals.grade_trial(row, events, states)
+        return trial["verdict"], sorted(c["id"] for c in trial["checks"] if not c["pass"])
+
+    def test_probe_one_call_denied_another_lands_on_the_wrong_item_is_a_fail(self):
+        verdict, failing = self.denied_set_2(moved(T, {3: "doing", 4: "done"}), [SKILL_CALL, ("Bash", {"command": SET_3_DOING}), ("Bash", {"command": self.SET_4_DONE})])
+        self.assertEqual(verdict, "FAIL")
+        self.assertEqual(failing, ["not-permission-blocked", "others-untouched", "wanted-state"])
+        # without the denial the same run is a FAIL too: the denial must not change the verdict
+        row, events, states = helpers.good("update", calls=[SKILL_CALL, ("Bash", {"command": SET_3_DOING}), ("Bash", {"command": self.SET_4_DONE})],
+                                           after_tracker=moved(T, {3: "doing", 4: "done"}))
+        self.assertEqual(run_evals.grade_trial(row, events, states)["verdict"], "FAIL")
+
+    def test_probe_the_reminder_finishes_without_a_marker_and_with_a_wrong_write_is_a_fail(self):
+        renamed = moved(tracker("stale-task"), {2: "done"})
+        renamed["items"][0]["name"] = "Something else"
+        row, events, states = helpers.good("reminded-update", hook=False, marker=False, after_tracker=renamed)
+        trial = run_evals.grade_trial(row, events, states)
+        failing = {c["id"] for c in trial["checks"] if not c["pass"]}
+        self.assertLessEqual({"reminder-fired", "others-untouched"}, failing)
+        self.assertEqual(trial["verdict"], "FAIL")
+
+    def test_a_pure_denial_with_nothing_changed_stays_inconclusive(self):
+        denial = {"tool_name": "Bash", "tool_input": {"command": SET_2_DONE}}
+        row, events, states = helpers.good("update", denials=[denial], after_tracker=SAME, outputs={SET_2_DONE: (self.DENIED_TEXT, True)})
+        trial = run_evals.grade_trial(row, events, states)
+        self.assertEqual(trial["verdict"], "INCONCLUSIVE")
+        self.assertEqual(sorted(c["id"] for c in trial["checks"] if not c["pass"]), ["not-permission-blocked", "timestamps-by-script", "wanted-state"])
+
+    def test_a_hook_that_never_fired_with_nothing_changed_stays_inconclusive(self):
+        row, events, states = helpers.good("reminded-update", hook=False, marker=False, after_tracker=SAME, calls=[helpers.CALLS["reminded-update"][0]])
+        self.assertEqual(run_evals.grade_trial(row, events, states)["verdict"], "INCONCLUSIVE")
+
+    def test_a_denied_create_that_made_no_tracker_is_inconclusive_but_a_bad_one_is_a_fail(self):
+        denial = {"tool_name": "Bash", "tool_input": {"command": INIT_EMPTY}}
+        calls = [SKILL_CALL, ("Bash", {"command": INIT_EMPTY})]
+        row, events, states = helpers.good("create", calls=calls, denials=[denial], after_tracker=NOTHING, outputs={INIT_EMPTY: (self.DENIED_TEXT, True)})
+        trial = run_evals.grade_trial(row, events, states)
+        self.assertEqual(sorted(c["id"] for c in trial["checks"] if not c["pass"]), ["not-permission-blocked", "tracker-created", "tracker-valid"])
+        self.assertEqual(trial["verdict"], "INCONCLUSIVE")
+        # a tracker that exists but is wrong or invalid was written: not explained by the denial
+        for bad in ({**NEW_TRACKER, "title": "Wrong"}, "not json"):
+            row, events, states = helpers.good("create", calls=calls, denials=[denial], after_tracker=bad, outputs={INIT_EMPTY: (self.DENIED_TEXT, True)})
+            self.assertEqual(run_evals.grade_trial(row, events, states)["verdict"], "FAIL", bad)
+
+    def test_a_denied_update_that_corrupted_a_valid_tracker_is_a_fail(self):
+        corrupt = moved(T, {3: "doing"})
+        corrupt["items"][0].pop("name")
+        verdict, failing = self.denied_set_2(corrupt, [SKILL_CALL, ("Bash", {"command": SET_3_DOING})])
+        self.assertEqual(verdict, "FAIL")
+        self.assertIn("tracker-valid", failing)
+
+    def test_the_table_explains_only_missing_effects(self):
+        # the failures that need an actual wrong write are explained by no precondition, with or without a case
+        needs_a_write = {"others-untouched", "nothing-else-changed", "no-direct-tracker-write", "no-write-attempt", "tracker-not-committed",
+                         "written-by-script", "quiet-when-nothing-changed", "show-reads-only", "no-tracker-when-negative"}
+        for cid, explained in checks.EXPLAINED_BY.items():
+            self.assertFalse(needs_a_write & explained, cid)
+        for cid in ("not-permission-blocked", "reminder-fired", "reminder-delivered", "plugin-under-test-isolated"):
+            self.assertEqual(checks.EXPLAINED_BY[cid] & checks.SNAPSHOT_CHECKS, set(), cid)
+            self.assertFalse(checks.EXPLAINED_BY[cid] - {"wanted-state", "shown-by-script", "skill-loaded", "skill-trigger"}, cid)
+
+    def test_the_conditional_explanations_need_an_unchanged_tracker_or_a_missing_snapshot(self):
+        row, events, states = helpers.good("update", after_tracker=SAME)
+        unchanged = checks.Case.build(row, events, states)
+        row, events, states = helpers.good("update")
+        written = checks.Case.build(row, events, states)
+        for pre in (["not-permission-blocked"], ["reminder-fired"], ["reminder-delivered"], ["plugin-under-test-isolated"], ["agent-completed"]):
+            self.assertLessEqual(checks.IF_UNCHANGED, checks.explained_failures(pre, unchanged), pre)
+            self.assertFalse(checks.IF_UNCHANGED & checks.explained_failures(pre, written), pre)
+            self.assertFalse(checks.IF_UNCHANGED & checks.explained_failures(pre), pre)         # no case: the strict reading
+            self.assertNotIn("others-untouched", checks.explained_failures(pre, unchanged), pre)
+        incomplete = checks.Case.build(row, events, {})
+        self.assertLessEqual(checks.SNAPSHOT_CHECKS, checks.explained_failures(["agent-completed"], incomplete))
+        self.assertFalse(checks.SNAPSHOT_CHECKS - checks.IF_UNCHANGED & checks.explained_failures(["not-permission-blocked"], incomplete))
+
+
 class AgentCompleted(unittest.TestCase):
     def grade(self, expect, mutate, **override):
         row, events, states = helpers.good(expect, **override)

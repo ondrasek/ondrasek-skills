@@ -99,17 +99,19 @@ def run_agent(row, trial, args):
             shutil.rmtree(root, ignore_errors=True)
 
 
-def verdict(results):
+def verdict(results, case=None):
     """PASS, FAIL or INCONCLUSIVE from the hard checks; the `soft` group (prose heuristics) is ignored.
 
     No hard check failed: PASS. A precondition failed: INCONCLUSIVE, unless a failed hard check is explained by none of the failed
-    preconditions (checks.EXPLAINED_BY): that one is the agent's own doing, so FAIL. Otherwise (hard checks failed, no precondition): FAIL."""
+    preconditions (checks.explained_failures: only what nothing-happened can cause, a missing change; never an item the prompt did not
+    name, a corrupt tracker, a stray file or a write attempt): that one is the agent's own doing, so FAIL. Otherwise (hard checks failed,
+    no precondition): FAIL. `case` (the checks.Case) enables the conditional explanations (an unchanged tracker, a missing snapshot)."""
     failed = [r["id"] for r in results if not r["pass"] and checks.GROUPS[r["id"]] != "soft"]
     pre = [cid for cid in failed if checks.GROUPS[cid] == "precondition"]
     hard = [cid for cid in failed if checks.GROUPS[cid] != "precondition"]
     if not pre:
         return "FAIL" if hard else "PASS"
-    explained = set().union(*(checks.EXPLAINED_BY.get(cid, set()) for cid in pre))
+    explained = checks.explained_failures(pre, case)
     return "FAIL" if any(cid not in explained for cid in hard) else "INCONCLUSIVE"
 
 
@@ -125,7 +127,7 @@ def grade_trial(row, events, states, note="", plugin=""):
     results = [{"id": cid, "pass": ok, "notes": note} for cid, ok, note in checks.run_checks(case)]
     result = trace.result_event(events) or {}
     # the cost of the LAST result event: agent_trace.stats() sums every result event, and a resumed or continued session reports the whole
-    return {"verdict": verdict(results), "warnings": warnings_of(results), "checks": results, "turns": result.get("num_turns"), "cost": result.get("total_cost_usd"),
+    return {"verdict": verdict(results, case), "warnings": warnings_of(results), "checks": results, "turns": result.get("num_turns"), "cost": result.get("total_cost_usd"),
             "duration_ms": result.get("duration_ms")}
 
 

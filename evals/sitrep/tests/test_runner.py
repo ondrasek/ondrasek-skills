@@ -66,7 +66,7 @@ class Runner(unittest.TestCase):
         self.assertEqual(code, 0, report)
         self.assertIn("pass rate 100%", report)
         self.assertIn("cases passed 4/4", report)
-        self.assertIn("precondition 8/8", report)
+        self.assertIn("precondition 12/12", report)
 
     def test_each_misbehaviour_is_caught_by_its_own_check_from_the_state(self):
         for mode, expected in MODES.items():
@@ -178,6 +178,49 @@ class Runner(unittest.TestCase):
         stream = io.StringIO()
         self.assertEqual(run_evals.main(["--cases", str(self.csv), "--fixtures", str(self.tmp / "nowhere")], stream), 1)
         self.assertIn("no recorded trace", stream.getvalue())
+
+    def results_of(self, results):
+        return {p["id"]: (p["trials"][0]["verdict"], {c["id"] for c in p["trials"][0]["checks"] if not c["pass"]}) for p in json.loads(Path(results).read_text())["prompts"]}
+
+    def test_cases_that_were_never_recorded_are_inconclusive_not_failed(self):
+        """R4-1: `--fixtures` on a directory without the cases (the README tells you to run the canary first) must not call them FAIL."""
+        for directory in (self.tmp / "nowhere", self.tmp):
+            stream, results = io.StringIO(), self.tmp / "r.json"
+            code = run_evals.main(["--cases", str(self.csv), "--fixtures", str(directory), "--results", str(results)], stream)
+            self.assertEqual(code, 1, stream.getvalue())
+            self.assertEqual({v for v, _ in self.results_of(results).values()}, {"INCONCLUSIVE"}, stream.getvalue())
+            self.assertIn("inconclusive 4, failed 0", stream.getvalue())
+            self.assertIn("state-recorded", stream.getvalue())
+
+    def test_a_good_recording_that_lost_its_state_file_is_inconclusive(self):
+        self.run_main()
+        for case in ("r1", "m1", "f1", "n1"):
+            (self.out / f"{case}.state.json").unlink()
+        stream, results = io.StringIO(), self.tmp / "r.json"
+        self.assertEqual(run_evals.main(["--cases", str(self.csv), "--fixtures", str(self.out), "--results", str(results)], stream), 1, stream.getvalue())
+        got = self.results_of(results)
+        self.assertEqual({v for v, _ in got.values()}, {"INCONCLUSIVE"}, stream.getvalue())
+        for case, (_, failed) in got.items():
+            self.assertIn("state-recorded", failed, case)
+        self.assertIn("inconclusive 4, failed 0", stream.getvalue())
+
+    def test_a_recording_with_one_case_missing_grades_only_that_case_inconclusive(self):
+        self.run_main()
+        (self.out / "f1.jsonl").unlink()
+        (self.out / "f1.state.json").unlink()
+        stream, results = io.StringIO(), self.tmp / "r.json"
+        run_evals.main(["--cases", str(self.csv), "--fixtures", str(self.out), "--results", str(results)], stream)
+        self.assertEqual({case: v for case, (v, _) in self.results_of(results).items()}, {"r1": "PASS", "m1": "PASS", "f1": "INCONCLUSIVE", "n1": "PASS"})
+
+    def test_an_unreadable_state_file_is_a_missing_one(self):
+        self.run_main()
+        (self.out / "n1.state.json").write_text("{not json", encoding="utf-8")
+        (self.out / "f1.state.json").write_text("[1, 2]", encoding="utf-8")
+        stream, results = io.StringIO(), self.tmp / "r.json"
+        run_evals.main(["--cases", str(self.csv), "--fixtures", str(self.out), "--results", str(results)], stream)
+        got = self.results_of(results)
+        self.assertEqual((got["n1"][0], got["f1"][0]), ("INCONCLUSIVE", "INCONCLUSIVE"))
+        self.assertEqual({got["r1"][0], got["m1"][0]}, {"PASS"})
 
     def test_unknown_case_id_and_bad_trials(self):
         self.assertEqual(self.run_main("--only", "zzz")[0], 2)

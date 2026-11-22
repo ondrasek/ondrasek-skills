@@ -37,6 +37,28 @@ class Commands(unittest.TestCase):
         self.assertEqual(names("sh -c \"bash -c 'rm x'\""), ["rm"])
         self.assertEqual(names("eval rm x"), ["rm"])
 
+    def test_combined_short_flags_that_include_c_give_the_command_string(self):
+        """`bash -lc 'mkdir ...'` runs the string like `-c` does (round 4): -lc, -ec, -xec, -ic, flags before the -c, zsh and sh."""
+        for line in ("bash -lc 'mkdir -p /r/tmp/x'", "bash -ec 'mkdir -p /r/tmp/x'", "sh -xec 'mkdir -p /r/tmp/x'", "zsh -ic 'mkdir -p /r/tmp/x'",
+                     "bash -c 'mkdir -p /r/tmp/x'", "bash -o pipefail -c 'mkdir -p /r/tmp/x'", "bash --login -c 'mkdir -p /r/tmp/x'",
+                     "env X=1 bash -lc 'mkdir -p /r/tmp/x'"):
+            command, = shell_argv.commands(line)
+            self.assertEqual((command.name, command.args), ("mkdir", ["-p", "/r/tmp/x"]), line)
+        self.assertEqual(names("bash -lc 'cd a; rm -r b'"), ["cd", "rm"])
+        self.assertEqual(names("sh -c \"bash -lc 'rm x'\""), ["rm"])
+
+    def test_a_shell_flag_cluster_without_c_is_not_a_command_string(self):
+        command, = shell_argv.commands("bash -e /p/report.sh new")
+        self.assertEqual((command.name, command.args), ("report.sh", ["new"]))
+        command, = shell_argv.commands("bash -l /p/report.sh new")
+        self.assertEqual(command.name, "report.sh")
+        self.assertEqual(names("bash -lc"), ["bash"])          # no string to read: the shell itself
+
+    def test_inline_programs_of_other_interpreters_are_not_scripts(self):
+        for line in ("python3 -c 'print(1)'", "perl -pe 's/a/b/' f", "node -e 'x'", "perl -lne 'print' f"):
+            self.assertEqual(len(shell_argv.commands(line)), 1, line)
+            self.assertEqual(names(line)[0], line.split()[0], line)
+
     def test_a_script_run_by_an_interpreter_is_that_script(self):
         command, = shell_argv.commands("bash /p/report.sh new")
         self.assertEqual((command.name, command.args, command.path), ("report.sh", ["new"], "/p/report.sh"))
