@@ -48,6 +48,12 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/milestones.py" init      # an example file 
 python3 "${CLAUDE_SKILL_DIR}/scripts/milestones.py" init --empty --title "Thesis"   # a tracker with no items
 ```
 
+A new tracker with several milestones is one command line with the full path repeated in every call, never a variable:
+
+```sh
+python3 "${CLAUDE_SKILL_DIR}/scripts/milestones.py" init --empty --title "Importer" && python3 "${CLAUDE_SKILL_DIR}/scripts/milestones.py" add --name "Design the schema" && python3 "${CLAUDE_SKILL_DIR}/scripts/milestones.py" add --name "Build the importer" && python3 "${CLAUDE_SKILL_DIR}/scripts/milestones.py" show
+```
+
 - `started` is written when an item first goes to `doing`, `finished` when it goes to `done`
   (removed when it leaves `done`); the Duration column and the statusline's `▸ #N 1h12m` read
   them. `--left ""` and `--needs ""` clear the field.

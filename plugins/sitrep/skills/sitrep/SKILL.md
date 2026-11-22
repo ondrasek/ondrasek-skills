@@ -9,7 +9,7 @@ Show the whole situation at a glance for a visual thinker with ADHD. Output is a
 
 ## 1. Collect silently
 
-Gather every open item from the conversation, tool output, notes and files in scope: decisions, questions, clarifications, concerns, risks, blockers, unverified assumptions. Dedupe and merge overlaps. Note which items must be settled before others (`dependsOn`).
+Gather every open item from the conversation, tool output, notes and files in scope: decisions, questions, clarifications, concerns, risks, blockers, unverified assumptions. Look in the working tree too, not only at what you were handed: list the project root and its docs folder, and read any notes, open-questions, decisions, TODO or risk document you find, even when a milestone tracker already gives you some items (the tracker is one source, not the only one). Dedupe and merge overlaps. Note which items must be settled before others (`dependsOn`).
 
 If the project has a milestone tracker (`.cache/milestones.json` in the project root; read it with Read, it is written by the `milestones` plugin), take it in too. It is optional: no file, no change.
 

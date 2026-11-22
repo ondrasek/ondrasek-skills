@@ -20,14 +20,14 @@
       "name": "sitrep",
       "source": "./plugins/sitrep",
       "description": "Turn all open items, risks and concerns into a temporary visual HTML situation report (priority matrix, dependency map, cards), built for visual thinkers with ADHD.",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "category": "productivity"
     },
     {
       "name": "milestones",
       "source": "./plugins/milestones",
       "description": "A per-project milestone tracker (.cache/milestones.json) with a /milestones table, a progress bar and a colour statusline segment that shows what is left and who must act, and a Stop hook that nudges when the tracker is stale.",
-      "version": "0.3.1",
+      "version": "0.3.2",
       "category": "productivity"
     },
     {
