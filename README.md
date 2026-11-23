@@ -97,7 +97,7 @@ make -C evals/block-force-push eval ARGS="--only plain-push-control --trials 1" 
 
 `evals/oaat/` grades the live `plugins/oaat` skill (deterministic checks on the reply and the tool calls, optional rubric judge); see its [README](evals/oaat/README.md). `evals/agent-md-audit/` grades `plugins/agent-md-audit` on the files it leaves behind (nothing may change before approval; the apply turn must fix CLAUDE.md and leave AGENTS.md alone); see its [README](evals/agent-md-audit/README.md), including why it does not use `claude plugin eval`.
 
-[`EVALS.html`](EVALS.html) is a guided tour of the evals for PA015 students: the design ideas, the six harnesses, what the real runs taught us, how to run them, and exercises.
+[`EVALS.html`](EVALS.html) is a map of the evals for PA015 students: the anatomy of a score, how to earn trust in a grader, the parts of the harness, sixteen filterable topic cards with trust labels, a dated timeline, seven working rules, and an appendix with run commands and exercises.
 
 `evals/_common/` holds the two modules all six harnesses import (`agent_trace.py`, the stream-json reader, and `runner_cmd.py`, the command runner); they are not copied into the harnesses.
 

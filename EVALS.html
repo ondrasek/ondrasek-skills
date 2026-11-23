@@ -3,28 +3,30 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Evals for agent skills and plugins</title>
+<title>Evals of agent skills: a map</title>
 <style>
   :root {
     --bg: #fbfaf7; --surface: #ffffff; --ink: #1d2230; --muted: #566074; --line: #dcd8cf;
     --accent: #1f5fbf; --accent-soft: #e6eefb; --ok: #1d7a46; --ok-soft: #e3f4ea;
     --warn: #96600a; --warn-soft: #fbf0d9; --bad: #a3322a; --bad-soft: #fbe7e5; --code-bg: #f1efe9;
+    --t-model: #7a3fb0; --t-harness: #1f5fbf; --t-both: #2f7d6f;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
       --bg: #14171f; --surface: #1c2030; --ink: #e8eaf1; --muted: #a2abc0; --line: #2f354a;
       --accent: #7fb0ff; --accent-soft: #1d2a47; --ok: #66d19a; --ok-soft: #153126;
       --warn: #f0bf6a; --warn-soft: #3a2d12; --bad: #ff8f86; --bad-soft: #3d1b19; --code-bg: #232840;
+      --t-model: #c9a0f0; --t-harness: #7fb0ff; --t-both: #7fd6c4;
     }
   }
   * { box-sizing: border-box; }
   html { scroll-behavior: smooth; }
   body { margin: 0; background: var(--bg); color: var(--ink); font: 17px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  .wrap { max-width: 56rem; margin: 0 auto; padding: 0 16px 80px; }
+  .wrap { max-width: 58rem; margin: 0 auto; padding: 0 16px 80px; }
   header.top { padding: 40px 0 8px; }
-  header.top p.kicker { margin: 0 0 6px; color: var(--accent); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; font-size: .8rem; }
-  h1 { font-size: clamp(1.9rem, 5vw, 2.6rem); line-height: 1.15; margin: 0 0 12px; }
-  h2 { font-size: 1.55rem; margin: 2.6em 0 .5em; padding-top: .4em; border-top: 1px solid var(--line); line-height: 1.25; }
+  .kicker { margin: 0 0 6px; color: var(--accent); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; font-size: .8rem; }
+  h1 { font-size: clamp(1.9rem, 5vw, 2.6rem); line-height: 1.15; margin: 0 0 10px; }
+  h2 { font-size: 1.55rem; margin: 2.6em 0 .4em; padding-top: .4em; border-top: 1px solid var(--line); line-height: 1.25; }
   h3 { font-size: 1.15rem; margin: 1.8em 0 .3em; }
   p { margin: .7em 0; }
   a { color: var(--accent); }
@@ -32,14 +34,15 @@
   code { background: var(--code-bg); padding: .08em .35em; border-radius: 4px; }
   pre { background: var(--code-bg); padding: 12px 14px; border-radius: 8px; overflow-x: auto; line-height: 1.5; }
   pre code { background: none; padding: 0; }
-  .lede { font-size: 1.12rem; color: var(--muted); max-width: 46rem; }
+  .lede { font-size: 1.1rem; color: var(--muted); max-width: 48rem; }
   .meta { color: var(--muted); font-size: .9rem; }
+  .formula { font: 600 1.05rem/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 8px; padding: 12px 16px; margin: 1.2em 0; overflow-x: auto; }
+  .formula small { display: block; font: 400 .85rem/1.5 system-ui, sans-serif; color: var(--muted); margin-top: 6px; }
   nav.toc { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 18px; margin: 22px 0; }
   nav.toc strong { display: block; margin-bottom: 4px; }
   nav.toc ol { margin: 0; padding-left: 1.2em; columns: 2; column-gap: 28px; }
   nav.toc li { break-inside: avoid; }
   .callout { border-left: 4px solid var(--accent); background: var(--accent-soft); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 1.2em 0; }
-  .callout.ok { border-color: var(--ok); background: var(--ok-soft); }
   .callout.warn { border-color: var(--warn); background: var(--warn-soft); }
   .callout.bad { border-color: var(--bad); background: var(--bad-soft); }
   .callout p:first-child { margin-top: 0; } .callout p:last-child { margin-bottom: 0; }
@@ -49,22 +52,62 @@
   th { background: var(--code-bg); font-weight: 600; white-space: nowrap; }
   tr:last-child td { border-bottom: none; }
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .pill { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: .78rem; font-weight: 600; border: 1px solid transparent; white-space: nowrap; }
+  .pill { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: .76rem; font-weight: 600; border: 1px solid transparent; white-space: nowrap; vertical-align: middle; }
   .pill.pass { background: var(--ok-soft); color: var(--ok); border-color: var(--ok); }
   .pill.fail { background: var(--bad-soft); color: var(--bad); border-color: var(--bad); }
-  .pill.inc { background: var(--warn-soft); color: var(--warn); border-color: var(--warn); }
-  .pill.soft { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
-  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 14px; margin: 1em 0; }
-  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; }
-  .card h3 { margin: 0 0 .2em; font-size: 1.02rem; }
-  .card p { margin: .35em 0; font-size: .93rem; }
+  .pill.inc  { background: var(--warn-soft); color: var(--warn); border-color: var(--warn); }
+  .pill.t-model   { color: var(--t-model);   border-color: var(--t-model); }
+  .pill.t-harness { color: var(--t-harness); border-color: var(--t-harness); }
+  .pill.t-both    { color: var(--t-both);    border-color: var(--t-both); }
+  .pill.u-est { background: var(--ok-soft);   color: var(--ok);    border-color: var(--ok); }
+  .pill.u-con { background: var(--warn-soft); color: var(--warn);  border-color: var(--warn); }
+  .pill.u-inf { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+  .pill.u-gap { background: var(--bad-soft);  color: var(--bad);   border-color: var(--bad); }
+  .legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 12px; margin: 1em 0; }
+  .legend > div { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; font-size: .93rem; }
+  .legend ul { margin: .3em 0 0; padding-left: 1.1em; } .legend li { margin: .25em 0; }
+  /* selectable stages / steps / parts */
+  .strip { display: flex; flex-wrap: wrap; gap: 8px; margin: 1em 0 .6em; }
+  .strip button { font: inherit; font-size: .9rem; cursor: pointer; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; }
+  .strip button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+  .strip button:focus-visible, .filters button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 18px; margin: .8em 0; }
+  .panel h3 { margin: .1em 0 .1em; font-size: 1.1rem; }
+  .panel .q { color: var(--muted); font-style: italic; margin: 0 0 .5em; }
+  .panel dl { margin: .4em 0; } .panel dt { font-weight: 600; margin-top: .7em; font-size: .9rem; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); }
+  .panel dd { margin: .15em 0 0; }
+  .panel .tags { margin-top: .8em; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: .88rem; }
+  html.js .panel { display: none; } html.js .panel.open { display: block; }
+  /* map */
+  .filters { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 1em 0; font-size: .88rem; }
+  .filters .grp { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .filters .grp > span { color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: .75rem; letter-spacing: .04em; }
+  .filters button { font: inherit; font-size: .84rem; cursor: pointer; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px; }
+  .filters button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(17.5rem, 1fr)); gap: 14px; margin: 1em 0; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; display: flex; flex-direction: column; gap: 4px; }
+  .card.hide { display: none; }
+  .card h4 { margin: 0; font-size: 1.02rem; line-height: 1.3; }
+  .card .num { font-weight: 600; color: var(--accent); font-size: .92rem; }
+  .card p { margin: .2em 0; font-size: .9rem; }
+  .card .mis { color: var(--muted); }
+  .card .tags { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 2px; }
+  .count { color: var(--muted); font-size: .88rem; }
+  /* timeline */
+  ol.timeline { list-style: none; margin: 1em 0; padding: 0 0 0 22px; border-left: 2px solid var(--line); }
+  ol.timeline li { position: relative; margin: 0 0 14px; padding-left: 8px; }
+  ol.timeline li::before { content: ""; position: absolute; left: -31px; top: .45em; width: 12px; height: 12px; border-radius: 50%; background: var(--c, var(--muted)); border: 2px solid var(--bg); }
+  ol.timeline li.model { --c: var(--t-model); } ol.timeline li.harness { --c: var(--t-harness); } ol.timeline li.both { --c: var(--t-both); }
+  ol.timeline .d { font-weight: 600; font-size: .88rem; color: var(--muted); } ol.timeline .h { font-weight: 600; } ol.timeline p { margin: .1em 0; font-size: .93rem; }
+  .rules { counter-reset: r; list-style: none; padding: 0; }
+  .rules li { counter-increment: r; margin: .6em 0; padding-left: 2.4em; position: relative; }
+  .rules li::before { content: counter(r); position: absolute; left: 0; top: .05em; width: 1.7em; height: 1.7em; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-weight: 700; text-align: center; line-height: 1.7em; font-size: .9rem; }
   figure { margin: 1.4em 0; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
   figure svg { width: 100%; height: auto; display: block; }
   figcaption { color: var(--muted); font-size: .88rem; margin-top: 6px; }
   details { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px; margin: .6em 0; }
   details > summary { cursor: pointer; font-weight: 600; }
-  dl dt { font-weight: 600; margin-top: .8em; } dl dd { margin: .1em 0 0 0; color: var(--muted); }
-  ol.steps > li, ul.tight > li { margin: .35em 0; }
+  ul.tight > li { margin: .35em 0; }
   footer { margin-top: 3em; padding-top: 1em; border-top: 1px solid var(--line); color: var(--muted); font-size: .88rem; }
   svg text { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; fill: var(--ink); }
   svg .box { fill: var(--surface); stroke: var(--line); stroke-width: 1.5; }
@@ -72,193 +115,467 @@
   svg .arrow { stroke: var(--muted); stroke-width: 1.8; fill: none; }
   svg .small { font-size: 12.5px; fill: var(--muted); }
   @media (max-width: 640px) { nav.toc ol { columns: 1; } body { font-size: 16px; } }
-  @media print { body { background: #fff; color: #000; font-size: 11pt; } nav.toc, details { break-inside: avoid; } a { color: #000; } }
+  @media print { body { background: #fff; color: #000; font-size: 11pt; } html.js .panel { display: block !important; } .strip, .filters { display: none; } .card.hide { display: flex !important; } a { color: #000; } .panel, .card, details { break-inside: avoid; } }
 </style>
+<script>document.documentElement.classList.add('js');</script>
 </head>
 <body>
 <div class="wrap">
 
 <header class="top">
   <p class="kicker">PA015 · course material</p>
-  <h1>Evals for agent skills and plugins</h1>
-  <p class="lede">How do you know that an AI agent still does what a skill promises after you edit it? You cannot reread your way to the answer. You run the agent on fixed prompts and grade what it <em>did</em>. This document explains how the six eval harnesses of this repository work, what they found when they ran against a live agent, and what you can learn from them.</p>
-  <p class="meta">Repository: <code>ondrasek-skills</code> (a Claude Code plugin marketplace) · state of the evals: 22 November 2026, Claude Code 2.1.330 · the numbers below are from real runs unless marked otherwise.</p>
+  <h1>Evals of agent skills: a map</h1>
+  <p class="lede">What the six eval harnesses of this repository measure, how far each number can be trusted, and what you can learn from the way they were built. Structured as a map: the anatomy of a score, how to earn trust in a grader, the parts of the harness, a filterable set of topic cards, a dated timeline, and what to carry away.</p>
+  <p class="meta">Compiled 23 November 2026 from the repository as of 22 November 2026 · real runs 4 to 22 November 2026 · Claude Code 2.1.330 unless a line says otherwise. The structure follows the public page "Evaluations State of the Art Map" (author unknown); none of its figures or claims are reused here.</p>
 </header>
 
 <nav class="toc" aria-label="Contents">
   <strong>Contents</strong>
   <ol>
-    <li><a href="#why">Why evals</a></li>
-    <li><a href="#vocab">Skills, plugins and hooks in two minutes</a></li>
-    <li><a href="#principles">Seven design ideas</a></li>
-    <li><a href="#trial">Anatomy of one trial</a></li>
-    <li><a href="#harnesses">The six harnesses</a></li>
-    <li><a href="#lessons">What the real runs taught us</a></li>
-    <li><a href="#run">How to run them</a></li>
-    <li><a href="#layout">Where things are</a></li>
-    <li><a href="#exercises">Exercises</a></li>
-    <li><a href="#limits">What is not measured</a></li>
-    <li><a href="#glossary">Glossary and sources</a></li>
+    <li><a href="#formula">The formula and the legend</a></li>
+    <li><a href="#anatomy">1. Anatomy of a score</a></li>
+    <li><a href="#judge">2. Graders: how to earn trust in a judge</a></li>
+    <li><a href="#harness">3. Inside the harness</a></li>
+    <li><a href="#map">4. The map</a></li>
+    <li><a href="#timeline">5. The evals in 2026</a></li>
+    <li><a href="#carry">6. What to carry away</a></li>
+    <li><a href="#appendix">Appendix: run it yourself, exercises</a></li>
+    <li><a href="#sources">Sources</a></li>
   </ol>
 </nav>
 
-<div class="callout">
-  <p><strong>The one-paragraph version.</strong> Each harness builds a throwaway workspace, runs the real agent headless on a fixed prompt, and then grades <strong>the state the agent left behind</strong> (files, git history, a bare remote, a tracker, a report) with small pure functions. The agent's own account of what it did is only secondary evidence. A trial ends <span class="pill pass">PASS</span>, <span class="pill fail">FAIL</span> or <span class="pill inc">INCONCLUSIVE</span> (the behaviour under test never happened), and checks that only read the model's prose can warn but never decide. Every check has an invented failing run that a test enforces, so the machinery is tested offline for free before it ever spends a cent.</p>
+<h2 id="formula" style="border-top:none;margin-top:1.4em">The formula and the legend</h2>
+<div class="formula">score = f( skill + plugin, model, harness, task set, grader, sampling noise )
+  <small>In this project the thing under test is the <strong>skill or plugin</strong> (its text, scripts and hooks). The model family and Claude Code 2.1.330 are held fixed. Every number below is conditional on that.</small>
 </div>
 
-<h2 id="why">1. Why evals, and why not just unit tests</h2>
-<p>A skill is a text file of instructions that a language model reads. Changing one sentence can change behaviour in ways a diff does not show. Classic unit tests assume a deterministic function; here the "function" is a model that answers differently each time and that chooses its own tool calls. An <strong>eval</strong> is a repeatable experiment: fixed prompts, a controlled workspace, recorded behaviour, and explicit success criteria.</p>
-<p>This repository already has ordinary unit tests under <code>tests/</code>. They feed invented input to the scripts of the plugins (the hook shell scripts, <code>milestones.py</code>). They cannot tell you whether a hook fires in a real session, whether the agent obeys what the hook says, or whether a skill triggers on the right sentence and stays quiet on the wrong one. The evals in <code>evals/</code> answer exactly those questions, and they deliberately do not repeat what <code>tests/</code> already checks.</p>
-<p>Why not the built-in <code>claude plugin eval</code>? It is a good fit for "does the skill trigger and what does the reply say". These harnesses need three things its documentation did not offer when this was checked (see <a href="#glossary">sources</a>): assertions about file and git state (hashes, line counts, "nothing was committed"), a scripted second turn (the approval message after a proposal), and grading recorded runs offline so that the graders themselves can be unit-tested without model calls.</p>
+<div class="legend">
+  <div><strong>Trust labels</strong>
+    <ul>
+      <li><span class="pill u-est">established</span> measured here in real runs, or documented by Claude Code's own documentation</li>
+      <li><span class="pill u-con">contested</span> measured once, or reasonable people could disagree</li>
+      <li><span class="pill u-inf">my inference</span> reasoned, not measured</li>
+      <li><span class="pill u-gap">not yet checked</span> a known gap</li>
+    </ul></div>
+  <div><strong>Tracks</strong>
+    <ul>
+      <li><span class="pill t-model">MODEL</span> depends on what the model does: wording, flakiness, sample noise</li>
+      <li><span class="pill t-harness">HARNESS</span> depends on Claude Code or on our runner: permissions, hooks, graders, snapshots</li>
+      <li><span class="pill t-both">BOTH</span> cannot be separated</li>
+    </ul></div>
+  <div><strong>Verdicts of a trial</strong>
+    <ul>
+      <li><span class="pill pass">PASS</span> every deciding check holds</li>
+      <li><span class="pill fail">FAIL</span> a deciding check fails and nothing explains it away</li>
+      <li><span class="pill inc">INCONCLUSIVE</span> the behaviour under test never happened (a hook errored, a call was denied, the run crashed)</li>
+    </ul></div>
+</div>
 
-<h2 id="vocab">2. Skills, plugins and hooks in two minutes</h2>
-<dl>
-  <dt>Skill</dt><dd>A <code>SKILL.md</code> file with a short <code>description</code>. The agent loads the skill when the description matches what the user asked. The description drives <em>triggering</em>; the body is the behaviour.</dd>
-  <dt>Plugin</dt><dd>A package that can hold skills, hooks and scripts. This repository is a <em>marketplace</em> of six plugins: <code>oaat</code>, <code>sitrep</code>, <code>milestones</code>, <code>agent-md-audit</code>, <code>auto-commit</code>, <code>block-force-push</code>.</dd>
-  <dt>Hook</dt><dd>A script that Claude Code runs at an event, not the model. A <code>Stop</code> hook runs when the agent wants to finish; if it exits with code 2, its message goes back to the agent and the agent continues. A <code>PreToolUse</code> hook runs before a tool call; exit code 2 blocks the call and the agent sees the reason. Three of the plugins are hooks (<code>auto-commit</code>, <code>block-force-push</code>, and the reminder of <code>milestones</code>).</dd>
-  <dt>Headless run</dt><dd><code>claude -p "prompt"</code> runs the agent without a terminal UI. With <code>--output-format stream-json --verbose</code> it prints one JSON event per line (the <strong>trace</strong>). The harnesses parse that trace.</dd>
-</dl>
+<h3>What is evaluated</h3>
+<p>Six plugins have a harness each under <code>evals/&lt;plugin&gt;/</code>, sharing one module, <code>evals/_common/</code> (the stream-json reader and the command runner). Each harness builds a throwaway workspace, runs the real agent headless on a fixed prompt, and grades <strong>the state the agent left behind</strong>.</p>
+<div class="tablewrap"><table>
+  <thead><tr><th>Plugin</th><th>The promise that is graded</th><th class="num">Cases</th><th>Real runs</th></tr></thead>
+  <tbody>
+    <tr><td><code>oaat</code></td><td>presents one pending item at a time in a fixed shape (since 0.3: with the question tool when available)</td><td class="num">11</td><td><span class="pill pass">22 / 22</span> headless, 2 trials each on the final wording</td></tr>
+    <tr><td><code>agent-md-audit</code></td><td>audits <code>CLAUDE.md</code> and <code>AGENTS.md</code>, proposes first, edits only after approval</td><td class="num">8</td><td><span class="pill pass">8 / 8</span> 1 trial each</td></tr>
+    <tr><td><code>auto-commit</code> (Stop hook)</td><td>the hook's report leads to a saved, in-sync repository: merge not rebase, no <code>.env</code>, no invented remote</td><td class="num">6</td><td><span class="pill pass">18 / 18</span> 3 trials each</td></tr>
+    <tr><td><code>block-force-push</code> (PreToolUse hook)</td><td>a history rewrite is blocked, the remote stays unchanged, no workaround</td><td class="num">3</td><td><span class="pill pass">9 / 9</span> 3 trials each</td></tr>
+    <tr><td><code>milestones</code> (skill + Stop reminder)</td><td>a valid tracker, written only through its script, updated when work finishes</td><td class="num">10</td><td><span class="pill pass">30 / 30</span> 3 trials each</td></tr>
+    <tr><td><code>sitrep</code> (skill)</td><td>a parseable report outside the project with every open item, cleaned up afterwards</td><td class="num">8</td><td><span class="pill pass">21 / 21</span> on seven cases, <span class="pill pass">5 / 5</span> on the eighth after regrading (see stage 4)</td></tr>
+  </tbody>
+</table></div>
+<p class="meta">46 cases in total. Offline, the harnesses have 1,126 unit tests (<code>_common</code> 33, <code>oaat</code> 269, <code>agent-md-audit</code> 52, <code>auto-commit</code> 150, <code>block-force-push</code> 119, <code>milestones</code> 239, <code>sitrep</code> 264) and every real-run record is in the harness READMEs.</p>
 
-<h2 id="principles">3. Seven design ideas (and the reason for each)</h2>
-<ol class="steps">
-  <li><strong>The workspace is the ground truth, the transcript is secondary.</strong> A transcript can only <em>claim</em> "I changed nothing". The harness snapshots the files (sha-256, line count, text), the git HEAD, and for the git plugins the bare remote, before and after each turn, and compares. The trace also misses work done by sub-agents; the files do not.</li>
-  <li><strong>Checks are pure functions.</strong> A check receives the recorded trace and the snapshots and returns <code>(id, passed, note)</code>. No network, no model, no clock. That is what makes them testable.</li>
-  <li><strong>Every check has an invented failing run.</strong> A registry called <code>MUTATIONS</code> maps each check id to a doctored good run that must make exactly that check fail, and a test fails if a check has no entry. A check that has never been seen to fail proves nothing.</li>
-  <li><strong>Three verdicts, not two.</strong> If a <em>precondition</em> fails (the plugin did not load, the hook errored before it ran, the command was denied, the run crashed), the trial is <span class="pill inc">INCONCLUSIVE</span>, not a failure of the plugin. The rule is narrow: a precondition may explain a <em>missing</em> effect, never a <em>wrong write</em>. A denied call that left everything unchanged is inconclusive; a rewritten remote after the hook did run is still a FAIL.</li>
-  <li><strong>Deciding checks versus advisory ones.</strong> A check decided by state or by structured trace facts (tool name, command arguments, exit status) decides the verdict. A check that only matches words in text the model wrote is placed in a <em>soft</em> group: it is computed and reported as <span class="pill soft">WARN</span> but never changes the verdict. Regexes over prose cannot be made both unevadable and free of false alarms; three review rounds proved it.</li>
-  <li><strong>An offline stub agent.</strong> A small program prints invented traces and edits real files in real temporary git repositories, so the whole runner (build workspace, snapshots, grading, report) runs in the unit tests with no model. Recorded real runs can also be re-graded offline (<code>--fixtures</code>).</li>
-  <li><strong>Fixtures are built in code, never committed as files.</strong> A <code>CLAUDE.md</code> or <code>.claude/</code> directory committed under <code>evals/</code> would load for anyone working in the repository and would be audited by the skill under test. A test enforces that none exists.</li>
+<!-- ============================================================ 1 -->
+<h2 id="anatomy">1. Anatomy of a score</h2>
+<p>A score is the end of a chain of six decisions. Select a stage to see what it is here, how it fails, and where our evals stand.</p>
+
+<div data-sel>
+  <div class="strip" role="group" aria-label="Stages of a score">
+    <button data-target="s1">1 Construct</button><button data-target="s2">2 Task set</button><button data-target="s3">3 System under test</button>
+    <button data-target="s4">4 Grader</button><button data-target="s5">5 Statistics</button><button data-target="s6">6 Claim</button>
+  </div>
+
+  <article class="panel" id="s1">
+    <h3>Construct</h3><p class="q">What are we trying to measure?</p>
+    <dl>
+      <dt>What it is here</dt><dd>The promise of each plugin, stated in its <code>SKILL.md</code> or hook: "one item, one question per message", "propose first, change nothing before approval", "the hook report makes the agent save the work", "a blocked rewrite stays blocked". The construct is the promise, not a sentence the model happens to write.</dd>
+      <dt>How it fails</dt><dd>A check measures a proxy of the promise. "Exactly one question mark" is a proxy for "one question": a correct reply that quotes a URL with <code>?</code> fails it, a sneaky second question without a mark passes it.</dd>
+      <dt>Where we stand</dt><dd>Each harness README states the promise and lists every check against it. Checks decided by state (files, git history, the remote, the tracker) match the promise closely; checks on the model's wording are proxies, so they are demoted to advisory (see stage 4). No user study has asked whether the promises are the right ones.</dd>
+    </dl>
+    <div class="tags"><span class="pill t-both">BOTH</span><span class="pill u-con">contested</span> evidence: the "Checks" tables in <a href="evals/oaat/README.md">oaat</a> and <a href="evals/auto-commit/README.md">auto-commit</a></div>
+  </article>
+
+  <article class="panel" id="s2">
+    <h3>Task set</h3><p class="q">Which items stand in for it?</p>
+    <dl>
+      <dt>What it is here</dt><dd>46 cases in six CSV files: explicit, implicit and contextual prompts, follow-ups (skip, stop, tangent, approval), and negative controls where the skill must stay silent or change nothing. Workspaces are invented and generated by code in a temporary directory; nothing is a copy of a real project.</dd>
+      <dt>How it fails</dt><dd>Cases were chosen by hand (convenience sampling). Once every case passes, the set cannot separate a good version from a slightly worse one (saturation). The repository is public, so a future model could see the cases.</dd>
+      <dt>Where we stand</dt><dd>All 46 cases passed in the last real runs, so the set works as a <em>regression guard</em>, not as a ranking instrument. Two cases earned their place by exposing real problems: <code>with-milestones</code> (the agent skipped a file that held open questions) and <code>create-tracker</code> (the model chained calls through a shell variable). Whether 46 hand-picked cases represent real use is not checked.</dd>
+    </dl>
+    <div class="tags"><span class="pill t-both">BOTH</span><span class="pill u-est">established</span> (counts) <span class="pill u-gap">not yet checked</span> (representativeness)</div>
+  </article>
+
+  <article class="panel" id="s3">
+    <h3>System under test</h3><p class="q">Skill inside which harness?</p>
+    <dl>
+      <dt>What it is here</dt><dd>The plugin loaded with <code>--plugin-dir</code>, the model, Claude Code 2.1.330, and the <strong>permission mode with its allow-list</strong>. The user's own settings are left out (<code>--setting-sources project,local</code>).</dd>
+      <dt>How it fails</dt><dd>A score is credited to the skill when the permission mode produced it. Inside the Claude Code sandbox, hooks could not run at all (they could not create their data directory) and a session could not be resumed. Under <code>dontAsk</code>, three shapes were denied that no allow-list pattern could permit: output redirects, shell-variable calls, and reads outside the working directory.</dd>
+      <dt>Where we stand</dt><dd>Measured with small probes of the real CLI. Real runs must be started outside the sandbox. The git harnesses run under <code>acceptEdits</code>; <code>sitrep</code> also adds its plugin directory with <code>--add-dir</code>. Every README records the exact command and version.</dd>
+    </dl>
+    <div class="tags"><span class="pill t-harness">HARNESS</span><span class="pill u-est">established</span> evidence: Lessons in the <a href="evals/auto-commit/README.md">auto-commit</a> and <a href="evals/milestones/README.md">milestones</a> READMEs</div>
+  </article>
+
+  <article class="panel" id="s4">
+    <h3>Grader</h3><p class="q">Who decides pass or fail?</p>
+    <dl>
+      <dt>What it is here</dt><dd>Small pure functions over the recorded trace and the before/after snapshots. Checks sit in groups: precondition, process, gate, outcome, apply, and an advisory <em>soft</em> group (WARN, never decides). The verdict is PASS, FAIL or INCONCLUSIVE.</dd>
+      <dt>How it fails</dt><dd>False positives and false negatives. Real examples: a tangent reply that correctly names the current item as "Item 1 of 5" was failed by a header regex; a denied-then-retried command made a fully valid <code>sitrep</code> trial INCONCLUSIVE; early drafts of prose checks passed a lying reply.</dd>
+      <dt>Where we stand</dt><dd>Every check has an invented failing run enforced by a test. Independent model reviewers read the code on disk over several rounds and found real bugs each time; the fixes are in. Prose checks cannot be made both strict and fair, so they only warn. The recorded real trials are re-gradable offline, which is how the two false verdicts above were confirmed and fixed.</dd>
+    </dl>
+    <div class="tags"><span class="pill t-harness">HARNESS</span><span class="pill u-est">established</span> (tested) <span class="pill u-con">contested</span> (reviewers were models, no human audit)</div>
+  </article>
+
+  <article class="panel" id="s5">
+    <h3>Statistics</h3><p class="q">How sure is the number?</p>
+    <dl>
+      <dt>What it is here</dt><dd>Pass counts per case and trial, 1 to 5 trials per case. No standard errors or intervals are reported in the READMEs. Cases are run again after a change to see a before/after difference.</dd>
+      <dt>How it fails</dt><dd>A clean run is read as proof. If a case truly fails 40% of the time, three trials still all pass with probability 0.6<sup>3</sup> = 21.6%. With zero failures in <em>n</em> trials, the one-sided 95% upper bound on the failure rate is 1 − 0.05<sup>1/n</sup>: about 63% for n = 3 and about 9.5% for n = 30 (and the 30 are not independent draws from one population: they are 10 cases times 3).</dd>
+      <dt>Where we stand</dt><dd>Three clean trials per case rule out frequent failure, not rare failure. Before/after comparisons were large (0 of 3 to 3 of 3, 1 of 5 to 5 of 5) but were not tested for significance. Sample size was a budget choice (about $0.04 to $0.25 per trial).</dd>
+    </dl>
+    <div class="tags"><span class="pill t-model">MODEL</span><span class="pill u-est">established</span> (the arithmetic) <span class="pill u-gap">not yet checked</span> (intervals are not reported)</div>
+  </article>
+
+  <article class="panel" id="s6">
+    <h3>Claim</h3><p class="q">What may we conclude?</p>
+    <dl>
+      <dt>What it is here</dt><dd>The sentence in a README status line, for example "<code>milestones</code>: 30 of 30 trials pass on Claude Code 2.1.330".</dd>
+      <dt>How it fails</dt><dd>The claim is wider than the evidence: "the skill works" from invented traces; "the tool path works" for <code>oaat</code>, when headless runs cannot call that tool at all (measured: it is absent in <code>claude -p</code>).</dd>
+      <dt>Where we stand</dt><dd>Every README separates what real runs confirmed from what is still unconfirmed. The <code>oaat</code> tool path is graded only on invented traces plus one observed answer format, and the README says so in capitals.</dd>
+    </dl>
+    <div class="tags"><span class="pill t-both">BOTH</span><span class="pill u-inf">my inference</span> evidence: the "Unconfirmed" lists in every README</div>
+  </article>
+</div>
+
+<!-- ============================================================ 2 -->
+<h2 id="judge">2. Graders: how to earn trust in a judge</h2>
+<p>A grader is a classifier: it labels a run pass or fail, and it can be wrong. Our graders are mostly deterministic code, plus one optional model judge and a set of prose checks that behave like cheap judges. The loop below is the way to earn trust in any of them; each step says what we did and what we did not.</p>
+
+<div data-sel>
+  <div class="strip" role="group" aria-label="Steps of the validation loop">
+    <button data-target="j1">1 Criterion</button><button data-target="j2">2 Gold labels</button><button data-target="j3">3 Grader design</button>
+    <button data-target="j4">4 Measure the grader</button><button data-target="j5">5 Correct the estimate</button><button data-target="j6">6 Know its limit</button>
+  </div>
+
+  <article class="panel" id="j1">
+    <h3>Criterion</h3><p class="q">One narrow pass or fail question</p>
+    <dl>
+      <dt>What we did</dt><dd>Every check has an id and answers one question, for example <code>remote-unchanged</code> (is the remote ref the same as before?), <code>skip-last</code> (is the last option exactly "Skip for now"?). Each returns a pass flag and a note that says what it saw.</dd>
+      <dt>How it breaks</dt><dd>A criterion that bundles two questions fails for either and hides which.</dd>
+      <dt>Status</dt><dd>Done for the code graders. The optional <code>oaat</code> rubric judge restates the skill's rules in its own criteria list.</dd>
+    </dl>
+    <div class="tags"><span class="pill t-harness">HARNESS</span><span class="pill u-est">established</span></div>
+  </article>
+
+  <article class="panel" id="j2">
+    <h3>Gold labels</h3><p class="q">Experts label a random sample</p>
+    <dl>
+      <dt>What we did</dt><dd>We did <em>not</em> have experts label a random sample. Our gold labels are (a) invented good runs and invented bad runs built by editing a good one, one per check, and (b) real recorded traces that were regraded offline after each grader fix.</dd>
+      <dt>How it breaks</dt><dd>Labels written by the same author as the grader share its blind spots, and invented bad runs are the bad runs the author imagined.</dd>
+      <dt>Status</dt><dd>The independent reviewers wrote their own bad runs, which is the nearest thing to outside labels: they found false negatives the author had not imagined. No human-labelled random sample exists.</dd>
+    </dl>
+    <div class="tags"><span class="pill t-harness">HARNESS</span><span class="pill u-con">contested</span></div>
+  </article>
+
+  <article class="panel" id="j3">
+    <h3>Grader design</h3><p class="q">Rubric, examples, which model</p>
+    <dl>
+      <dt>What we did</dt><dd>Code graders as pure functions with regexes that are tested on both a passing and a failing text. The <code>oaat</code> harness also has an optional second model call that fills a JSON schema (<code>overall_pass</code>, a score, one entry per criterion); its prompt can be printed offline.</dd>
+      <dt>How it breaks</dt><dd>A model judge is a second noisy measurement and can disagree with the code checks.</dd>
+      <dt>Status</dt><dd>The judge is exercised in the tests with a stub judge only. None of the live runs reported here used it.</dd>
+    </dl>
+    <div class="tags"><span class="pill t-model">MODEL</span><span class="pill u-gap">not yet checked</span> (live judge)</div>
+  </article>
+
+  <article class="panel" id="j4">
+    <h3>Measure the grader</h3><p class="q">Treat it as a classifier</p>
+    <dl>
+      <dt>What we did</dt><dd>Reviewer probes: independent reviewers built traces that a check should pass or fail and ran them. The reviews found concrete errors in each round (a correct reply failed, a lying reply passed, a verdict that masked a real failure, a call after a template item that went unflagged).</dd>
+      <dt>How it breaks</dt><dd>Probes show that errors exist, not how often they occur.</dd>
+      <dt>Status</dt><dd>No precision or recall was measured on a labelled sample.</dd>
+    </dl>
+    <div class="tags"><span class="pill t-harness">HARNESS</span><span class="pill u-gap">not yet checked</span> (as rates)</div>
+  </article>
+
+  <article class="panel" id="j5">
+    <h3>Correct the estimate</h3><p class="q">Report a bias-corrected score</p>
+    <dl>
+      <dt>What we did</dt><dd>Nothing statistical. Pass rates are raw. What we did do is fix a grader and regrade the recorded runs: for example <code>discover-open-items</code> read 4 of 5 with one trial graded INCONCLUSIVE, and 5 of 5 after the retry rule was fixed.</dd>
+      <dt>How it breaks</dt><dd>Regrading after seeing the result invites fitting the grader to the answer. We limited it to cases where the reply was demonstrably valid and recorded the change.</dd>
+      <dt>Status</dt><dd>No bias-corrected estimate with an interval.</dd>
+    </dl>
+    <div class="tags"><span class="pill t-both">BOTH</span><span class="pill u-gap">not yet checked</span></div>
+  </article>
+
+  <article class="panel" id="j6">
+    <h3>Know its limit</h3><p class="q">Where the grader cannot decide</p>
+    <dl>
+      <dt>What we did</dt><dd>Three explicit places for "cannot decide": the INCONCLUSIVE verdict for environment failures; the advisory (WARN) group for wording; and a list of known residual gaps per README, for example a push hidden inside a heredoc, or a tangent flag whose item name contains a full stop.</dd>
+      <dt>How it breaks</dt><dd>A limit that is written down but never read.</dd>
+      <dt>Status</dt><dd>Every README lists its unconfirmed facts and known limits.</dd>
+    </dl>
+    <div class="tags"><span class="pill t-harness">HARNESS</span><span class="pill u-est">established</span></div>
+  </article>
+</div>
+
+<!-- ============================================================ 3 -->
+<h2 id="harness">3. Inside the harness</h2>
+<p>"The harness" has two meanings here: Claude Code around the model, and our runner around Claude Code. Each part can be evaluated alone by holding the model and the tasks fixed and changing only that part. Select a part.</p>
+
+<div data-sel>
+  <div class="strip" role="group" aria-label="Parts of the harness">
+    <button data-target="h1">Instructions</button><button data-target="h2">Tools</button><button data-target="h3">Context window</button>
+    <button data-target="h4">Memory</button><button data-target="h5">Handover</button><button data-target="h6">Orchestration</button>
+  </div>
+
+  <article class="panel" id="h1">
+    <h3>Instructions</h3><p class="q">System prompt and examples</p>
+    <dl>
+      <dt>What it is here</dt><dd>The text of <code>SKILL.md</code> and the prompt of each case.</dd>
+      <dt>How it breaks</dt><dd>One sentence changes behaviour in a way a diff does not show.</dd>
+      <dt>Isolated evaluation</dt><dd>Change one instruction, hold model and cases fixed, repeat. <code>milestones</code>: asking the model to write the script path out in every call took <code>update-finish-and-start</code> from 0 of 3 to 3 of 3; a worked example of a chained create took <code>create-tracker</code> from 1 of 3 to 3 of 3 (and 3 of 3 again in the repeat pass). <code>sitrep</code>: a sentence telling the agent to look in the working tree took the vague-prompt case from 1 of 5 to 5 of 5.</dd>
+    </dl>
+    <div class="tags"><span class="pill t-model">MODEL</span><span class="pill u-est">established</span> (large effects, small samples)</div>
+  </article>
+
+  <article class="panel" id="h2">
+    <h3>Tools</h3><p class="q">What the agent can call</p>
+    <dl>
+      <dt>What it is here</dt><dd>The allow-list, the permission mode and which tools exist at all. <code>--allowedTools</code>, <code>--permission-mode</code> (<code>dontAsk</code> or <code>acceptEdits</code>), <code>--add-dir</code>.</dd>
+      <dt>How it breaks</dt><dd>A denied call makes the agent give up on a whole tool, and the trial then measures the allow-list. The question tool does not exist in headless runs.</dd>
+      <dt>Isolated evaluation</dt><dd>A handful of one-command probes against the real CLI settled which command shapes each mode permits. <code>oaat</code>'s <code>AskUserQuestion</code> is not in <code>claude -p</code> (one probe: the model's search for it found nothing), which is why its tool path can only be graded on invented traces.</dd>
+    </dl>
+    <div class="tags"><span class="pill t-harness">HARNESS</span><span class="pill u-est">established</span></div>
+  </article>
+
+  <article class="panel" id="h3">
+    <h3>Context window</h3><p class="q">What stays in view, compaction</p>
+    <dl>
+      <dt>What it is here</dt><dd>What the agent sees at the start of a trial: the plugin, the fixture, the prompt. Isolation keeps the user's settings, hooks and plugins out, and unsets <code>CLAUDE_PROJECT_DIR</code> so a hook cannot look at the repository the harness was started from.</dd>
+      <dt>How it breaks</dt><dd>The user's own <code>~/.claude/CLAUDE.md</code> leaks into recorded traces; an inherited environment variable redirects a hook.</dd>
+      <dt>Isolated evaluation</dt><dd>Compaction is not evaluated: trials are short. Two-turn cases use a resumed session, where the second turn's result event already reports the whole session's cost (a real trace: $0.0906, then $0.1201 for the same session).</dd>
+    </dl>
+    <div class="tags"><span class="pill t-harness">HARNESS</span><span class="pill u-est">established</span> (isolation) <span class="pill u-gap">not yet checked</span> (compaction)</div>
+  </article>
+
+  <article class="panel" id="h4">
+    <h3>Memory</h3><p class="q">What persists across sessions</p>
+    <dl>
+      <dt>What it is here</dt><dd>Nothing carries over between trials by design: each trial gets a fresh workspace. What does persist is the plugin's own state, for example <code>.cache/milestones.json</code>, which the harness builds in code for each case, and the saved session that a second turn resumes.</dd>
+      <dt>How it breaks</dt><dd>Inside the sandbox the session store cannot be written, so the second turn fails with "No conversation found".</dd>
+      <dt>Isolated evaluation</dt><dd>The milestones cases vary the tracker (fresh, stale, blocked) and grade the file afterwards, with other items required to be untouched.</dd>
+    </dl>
+    <div class="tags"><span class="pill t-both">BOTH</span><span class="pill u-est">established</span></div>
+  </article>
+
+  <article class="panel" id="h5">
+    <h3>Handover</h3><p class="q">Passing work on</p>
+    <dl>
+      <dt>What it is here</dt><dd>Four handovers: a hook's report back to the agent (a Stop hook that exits with code 2 continues the run, documented and observed), the approval message of turn 2 (stated by content, because the model numbers its proposals differently every run), the answer of the question tool (returned inside the same turn), and sub-agents.</dd>
+      <dt>How it breaks</dt><dd>Work done in a sub-agent is invisible in the main trace, so a trace-only grader would miss it.</dd>
+      <dt>Isolated evaluation</dt><dd>This is the reason the ground truth is the file and git snapshot, not the transcript. The observed answer format of the question tool is a wrapper sentence, not a bare label; the harness parses it and labels it unconfirmed across versions.</dd>
+    </dl>
+    <div class="tags"><span class="pill t-harness">HARNESS</span><span class="pill u-est">established</span> (hooks) <span class="pill u-con">contested</span> (question-tool envelope: one sample)</div>
+  </article>
+
+  <article class="panel" id="h6">
+    <h3>Orchestration</h3><p class="q">Loop, sub-agents, topology</p>
+    <dl>
+      <dt>What it is here</dt><dd>The loop that hooks create (a Stop hook can make the agent continue, up to a documented cap of consecutive continuations), and the runner's own loop: trials, a per-call budget cap of $2 and a timeout.</dd>
+      <dt>How it breaks</dt><dd>A hook that errors before it runs looks like a plugin that failed to block anything.</dd>
+      <dt>Isolated evaluation</dt><dd>The hook events appear in the trace (<code>hook_started</code>, <code>hook_response</code> with exit code and outcome), so a hook error (an exit code other than 0 or 2) becomes a precondition: the trial is INCONCLUSIVE, not a plugin failure. The harnesses themselves were built by a pipeline of models in assigned roles (research, plan, build, review, fix) with human-approved decisions.</dd>
+    </dl>
+    <div class="tags"><span class="pill t-harness">HARNESS</span><span class="pill u-est">established</span></div>
+  </article>
+</div>
+
+<!-- ============================================================ 4 -->
+<h2 id="map">4. The map</h2>
+<p>Sixteen topic cards, each with one idea, one number, and a trust rating. Filter by group, track or trust. <span class="count" id="count"></span></p>
+
+<div class="filters" id="filters" aria-label="Filters">
+  <div class="grp" data-key="group"><span>Group</span><button data-v="all" aria-pressed="true">all</button><button data-v="Design" aria-pressed="false">Design</button><button data-v="Running" aria-pressed="false">Running</button><button data-v="Results" aria-pressed="false">Results</button></div>
+  <div class="grp" data-key="track"><span>Track</span><button data-v="all" aria-pressed="true">all</button><button data-v="model" aria-pressed="false">MODEL</button><button data-v="harness" aria-pressed="false">HARNESS</button><button data-v="both" aria-pressed="false">BOTH</button></div>
+  <div class="grp" data-key="trust"><span>Trust</span><button data-v="all" aria-pressed="true">all</button><button data-v="est" aria-pressed="false">established</button><button data-v="con" aria-pressed="false">contested</button><button data-v="inf" aria-pressed="false">my inference</button><button data-v="gap" aria-pressed="false">not yet checked</button></div>
+</div>
+
+<div class="cards" id="cards">
+  <div class="card" data-group="Design" data-track="harness" data-trust="est">
+    <div class="tags"><span class="pill t-harness">HARNESS</span><span class="pill u-est">established</span></div>
+    <h4>State is the ground truth</h4><p>A transcript can only claim "I changed nothing". The harness snapshots files, git HEAD and the remote and compares.</p>
+    <p class="num">3 snapshots per trial: before, after turn 1, after turn 2</p>
+    <p class="mis">Misconception: reading the agent's summary is enough. Sub-agents and shell commands leave no line in it.</p>
+  </div>
+  <div class="card" data-group="Design" data-track="harness" data-trust="est">
+    <div class="tags"><span class="pill t-harness">HARNESS</span><span class="pill u-est">established</span></div>
+    <h4>A failing run for every check</h4><p>A registry maps each check to an invented bad run that must fail it; a test fails if a check has none.</p>
+    <p class="num">6 of 6 harnesses enforce it</p>
+    <p class="mis">Misconception: a check that passes on real runs is proven. It may pass on everything.</p>
+  </div>
+  <div class="card" data-group="Design" data-track="harness" data-trust="est">
+    <div class="tags"><span class="pill t-harness">HARNESS</span><span class="pill u-est">established</span></div>
+    <h4>Three verdicts, one narrow rule</h4><p>A precondition may explain a <em>missing</em> effect, never a <em>wrong write</em>. That keeps environment failures out of the plugin's score without hiding real damage.</p>
+    <p class="num">3 first-run FAILs were harness or environment, not plugin</p>
+    <p class="mis">Misconception: INCONCLUSIVE is a polite FAIL. It is a "not measured".</p>
+  </div>
+  <div class="card" data-group="Design" data-track="harness" data-trust="con">
+    <div class="tags"><span class="pill t-harness">HARNESS</span><span class="pill u-con">contested</span></div>
+    <h4>Prose checks only warn</h4><p>Regexes over the model's wording trade false alarms for evasions; each fix swapped one for the other. They report WARN and never decide.</p>
+    <p class="num">3 review rounds, same trade each time</p>
+    <p class="mis">Misconception: a stricter regex is a better grader.</p>
+  </div>
+  <div class="card" data-group="Design" data-track="harness" data-trust="est">
+    <div class="tags"><span class="pill t-harness">HARNESS</span><span class="pill u-est">established</span></div>
+    <h4>An offline stub agent</h4><p>A stand-in prints invented traces and edits real files in real temporary git repositories, so the whole runner is tested without a model.</p>
+    <p class="num">1,126 offline tests</p>
+    <p class="mis">Misconception: you must pay for a model call to test a harness.</p>
+  </div>
+  <div class="card" data-group="Design" data-track="harness" data-trust="est">
+    <div class="tags"><span class="pill t-harness">HARNESS</span><span class="pill u-est">established</span></div>
+    <h4>Fixtures built in code</h4><p>A <code>CLAUDE.md</code> committed under <code>evals/</code> would load for anyone working in the repository and be audited by the skill under test.</p>
+    <p class="num">0 instruction files committed under <code>evals/</code> (a test enforces it)</p>
+    <p class="mis">Misconception: test data may sit anywhere in the repository.</p>
+  </div>
+  <div class="card" data-group="Running" data-track="harness" data-trust="est">
+    <div class="tags"><span class="pill t-harness">HARNESS</span><span class="pill u-est">established</span></div>
+    <h4>Run outside the sandbox</h4><p>Inside it, Claude Code could not create its plugin data directory or save sessions: hooks errored and resuming failed.</p>
+    <p class="num">4 harnesses lost their first attempt to it</p>
+    <p class="mis">Misconception: a failing hook case means a broken plugin.</p>
+  </div>
+  <div class="card" data-group="Running" data-track="harness" data-trust="est">
+    <div class="tags"><span class="pill t-harness">HARNESS</span><span class="pill u-est">established</span></div>
+    <h4>Permission modes have edges</h4><p><code>dontAsk</code> denied output redirects, shell-variable calls and reads outside the working directory even when allowed by pattern.</p>
+    <p class="num">3 command shapes no allow-list could fix</p>
+    <p class="mis">Misconception: a longer allow-list fixes a denial. Two guesses failed; probes settled it.</p>
+  </div>
+  <div class="card" data-group="Running" data-track="harness" data-trust="est">
+    <div class="tags"><span class="pill t-harness">HARNESS</span><span class="pill u-est">established</span></div>
+    <h4>Cost is a metric to get right</h4><p>A resumed turn's result already reports the whole session, so summing double-counts. One fix in the shared module corrected two harnesses.</p>
+    <p class="num">$0.1201, not $0.2107, for one two-turn trial</p>
+    <p class="mis">Misconception: instruments do not need testing.</p>
+  </div>
+  <div class="card" data-group="Running" data-track="harness" data-trust="est">
+    <div class="tags"><span class="pill t-harness">HARNESS</span><span class="pill u-est">established</span></div>
+    <h4>One shared module</h4><p>The stream-json reader and the command runner were six byte-identical copies; now one directory, and a test fails if a copy returns.</p>
+    <p class="num">6 copies, now 1</p>
+    <p class="mis">Misconception: copying is safer than sharing. It drifted by one fix in six places.</p>
+  </div>
+  <div class="card" data-group="Results" data-track="model" data-trust="est">
+    <div class="tags"><span class="pill t-model">MODEL</span><span class="pill u-est">established</span></div>
+    <h4>Skill wording moves the score</h4><p>One added instruction, same model, same cases: the denial that made a case inconclusive disappeared.</p>
+    <p class="num"><code>milestones</code> update case: 0 of 3 to 3 of 3</p>
+    <p class="mis">Misconception: a skill's text is documentation. It is behaviour.</p>
+  </div>
+  <div class="card" data-group="Results" data-track="model" data-trust="est">
+    <div class="tags"><span class="pill t-model">MODEL</span><span class="pill u-est">established</span></div>
+    <h4>A vague prompt exposed a gap</h4><p>With a tracker present the agent skipped the file that held the open questions; a one-sentence change to step 1 fixed it.</p>
+    <p class="num"><code>sitrep</code>: 1 of 5, then 5 of 5 (after regrading one valid trial)</p>
+    <p class="mis">Misconception: naming the file in the prompt tests the skill. It hid the gap.</p>
+  </div>
+  <div class="card" data-group="Results" data-track="model" data-trust="con">
+    <div class="tags"><span class="pill t-model">MODEL</span><span class="pill u-con">contested</span></div>
+    <h4>Small samples</h4><p>Three clean trials of one case still hide a failure rate of 40% about one time in five.</p>
+    <p class="num">3 of 3 clean: failure rate up to about 63% is not excluded (95%)</p>
+    <p class="mis">Misconception: all green means reliable.</p>
+  </div>
+  <div class="card" data-group="Results" data-track="both" data-trust="est">
+    <div class="tags"><span class="pill t-both">BOTH</span><span class="pill u-est">established</span></div>
+    <h4>Headless cannot call the question tool</h4><p>In <code>claude -p</code> the tool is absent, so <code>oaat</code>'s tool path can only be graded on invented traces; live runs exercise the text fallback.</p>
+    <p class="num">22 of 22 headless trials pass on the fallback</p>
+    <p class="mis">Misconception: a passing live suite covers the whole feature.</p>
+  </div>
+  <div class="card" data-group="Results" data-track="both" data-trust="gap">
+    <div class="tags"><span class="pill t-both">BOTH</span><span class="pill u-gap">not yet checked</span></div>
+    <h4>The tool path, interactively</h4><p>Its event shape is graded from invented traces plus one observed answer format; the full real stream has never been recorded.</p>
+    <p class="num">0 real interactive traces graded</p>
+    <p class="mis">Misconception: invented fixtures that match the docs match the product.</p>
+  </div>
+  <div class="card" data-group="Results" data-track="both" data-trust="gap">
+    <div class="tags"><span class="pill t-both">BOTH</span><span class="pill u-gap">not yet checked</span></div>
+    <h4>Independent replication</h4><p>One author directed the whole project; models built, ran and reviewed it. Nobody outside reran it.</p>
+    <p class="num">0 independent runs</p>
+    <p class="mis">Misconception: many reviews are many independent checks. They shared a design.</p>
+  </div>
+</div>
+
+<!-- ============================================================ 5 -->
+<h2 id="timeline">5. The evals in 2026</h2>
+<p>Dates are the dates of the work (the commit history and the README records). The dot colour shows the track.</p>
+<ol class="timeline">
+  <li class="harness"><span class="d">4 Nov 2026</span><div class="h">First real runs of <code>oaat</code>, in the PA015 sample</div><p>Claude Code 2.1.318. The isolation flags are tested; the later runs of that week refine the reply template.</p></li>
+  <li class="both"><span class="d">7 Nov 2026</span><div class="h">The <code>oaat</code> evals move into this repository</div><p>The <code>milestones</code> plugin is added. A full run of <code>oaat</code> 0.2.1 is recorded: 33 of 33 trials.</p></li>
+  <li class="harness"><span class="d">21 Nov 2026</span><div class="h"><code>agent-md-audit</code> and its evals</div><p>The first harness that grades files and git state instead of the transcript.</p></li>
+  <li class="harness"><span class="d">22 Nov 2026</span><div class="h">Harnesses for four more plugins, built and reviewed offline</div><p><code>auto-commit</code>, <code>block-force-push</code>, <code>milestones</code>, <code>sitrep</code>: several review rounds, a stub agent, a failing run for every check.</p></li>
+  <li class="harness"><span class="d">22 Nov 2026</span><div class="h">First real runs: the first attempt is void</div><p>Inside the Claude Code sandbox the hooks error and sessions cannot resume. Outside it, the canaries pass.</p></li>
+  <li class="harness"><span class="d">22 Nov 2026</span><div class="h">Probes of the permission modes</div><p>Redirects, shell variables and outside reads are denied under <code>dontAsk</code>. The git harnesses move to <code>acceptEdits</code>.</p></li>
+  <li class="model"><span class="d">22 Nov 2026</span><div class="h">A skill edit measured: <code>milestones</code> 0.3.1 and 0.3.2</div><p>Write the script path out in every call; a worked chained create. Denied trials go from 6 of 6 to none.</p></li>
+  <li class="model"><span class="d">22 Nov 2026</span><div class="h">The <code>sitrep</code> discovery gap, found and fixed</div><p>The vague prompt skipped the open-questions file in 4 of 5 trials; <code>sitrep</code> 0.3.1 closes it.</p></li>
+  <li class="harness"><span class="d">22 Nov 2026</span><div class="h">One shared module, one cost rule</div><p><code>evals/_common/</code> replaces six copies; the two-turn cost double-count is fixed.</p></li>
+  <li class="both"><span class="d">22 Nov 2026</span><div class="h">Repeat passes and the older two harnesses</div><p>Three trials per case: 18 of 18, 9 of 9, 30 of 30, 21 of 21 (plus 5 of 5 regraded). <code>agent-md-audit</code>'s first real run: 8 of 8. <code>oaat</code> after the move: 11 of 11.</p></li>
+  <li class="harness"><span class="d">22 Nov 2026</span><div class="h"><code>oaat</code> 0.3.0 to 0.3.2: the question tool</div><p>The skill uses <code>AskUserQuestion</code> when it is available. Headless runs cannot call it, so its checks are graded offline, per call, on invented traces; the live suite passes 22 of 22 on the fallback.</p></li>
 </ol>
 
-<h2 id="trial">4. Anatomy of one trial</h2>
-<figure>
-<svg viewBox="0 0 860 250" role="img" aria-label="Flow of one trial: build workspace, snapshot, run agent turn 1, snapshot, optional turn 2, snapshot, grade">
-  <defs><marker id="ah" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 Z" fill="#8a93a6"/></marker></defs>
-  <rect class="box" x="10" y="20" width="130" height="64" rx="8"/><text x="75" y="48" text-anchor="middle" font-size="14" font-weight="600">1 Build</text><text class="small" x="75" y="68" text-anchor="middle">temp repo from code</text>
-  <rect class="box key" x="165" y="20" width="130" height="64" rx="8"/><text x="230" y="48" text-anchor="middle" font-size="14" font-weight="600">2 Snapshot</text><text class="small" x="230" y="68" text-anchor="middle">files, HEAD, remote</text>
-  <rect class="box" x="320" y="20" width="130" height="64" rx="8"/><text x="385" y="48" text-anchor="middle" font-size="14" font-weight="600">3 Agent turn 1</text><text class="small" x="385" y="68" text-anchor="middle">claude -p, headless</text>
-  <rect class="box key" x="475" y="20" width="130" height="64" rx="8"/><text x="540" y="48" text-anchor="middle" font-size="14" font-weight="600">4 Snapshot</text><text class="small" x="540" y="68" text-anchor="middle">nothing may have moved</text>
-  <rect class="box" x="630" y="20" width="130" height="64" rx="8"/><text x="695" y="48" text-anchor="middle" font-size="14" font-weight="600">5 Turn 2 (some)</text><text class="small" x="695" y="68" text-anchor="middle">--resume, approval</text>
-  <rect class="box key" x="780" y="20" width="70" height="64" rx="8"/><text x="815" y="48" text-anchor="middle" font-size="14" font-weight="600">6</text><text class="small" x="815" y="68" text-anchor="middle">Snapshot</text>
-  <path class="arrow" d="M140,52 L163,52" marker-end="url(#ah)"/><path class="arrow" d="M295,52 L318,52" marker-end="url(#ah)"/><path class="arrow" d="M450,52 L473,52" marker-end="url(#ah)"/><path class="arrow" d="M605,52 L628,52" marker-end="url(#ah)"/><path class="arrow" d="M760,52 L778,52" marker-end="url(#ah)"/>
-  <path class="arrow" d="M230,84 L230,150 L420,150" marker-end="url(#ah)"/><path class="arrow" d="M540,84 L540,130 L440,130" marker-end="url(#ah)"/><path class="arrow" d="M815,84 L815,150 L640,150" marker-end="url(#ah)"/>
-  <rect class="box key" x="420" y="112" width="220" height="76" rx="8"/><text x="530" y="140" text-anchor="middle" font-size="14" font-weight="600">7 Grade</text><text class="small" x="530" y="160" text-anchor="middle">pure checks on trace + snapshots</text><text class="small" x="530" y="178" text-anchor="middle">PASS · FAIL · INCONCLUSIVE · WARN</text>
-  <text class="small" x="10" y="226">The trace of every turn is saved as JSONL next to the snapshots, so a run can be re-graded offline later.</text>
-</svg>
-<figcaption>One trial. The stream-json trace is the secondary evidence; the three snapshots are the ground truth.</figcaption>
-</figure>
-<p>Details that matter:</p>
+<!-- ============================================================ 6 -->
+<h2 id="carry">6. What to carry away</h2>
+
+<h3>6.1 Seven working rules</h3>
+<ol class="rules">
+  <li><strong>Ask what was held fixed.</strong> A score with no named version, permission mode and plugin version is a claim about an unknown system. Every README here names them.</li>
+  <li><strong>Ask for the interval.</strong> Three clean trials do not exclude a failure rate of about 63%; thirty pooled trials, about 9.5%. A pass count is not a rate.</li>
+  <li><strong>Ask how old and how public the tasks are.</strong> These cases are invented and built in code, but the repository is public, and a case that always passes cannot show a small regression.</li>
+  <li><strong>Ask who checked the grader.</strong> A grader is software and has bugs. Ours were tested with a failing run per check and probed by independent model reviewers; nobody labelled a random sample by hand.</li>
+  <li><strong>Ask who ran it.</strong> The author directed the work and models built, ran and reviewed it. There is no independent replication.</li>
+  <li><strong>Ask how the judge was validated.</strong> The code graders were; the optional model judge of <code>oaat</code> was not (only a stub in tests), and the prose checks are advisory for that reason.</li>
+  <li><strong>Ask what survives a context reset.</strong> Constraints that live only in a conversation are lost first. Here the record lives in the READMEs, the tests and the git history; recorded traces live in git-ignored <code>artifacts/</code> and are gone after a fresh clone.</li>
+</ol>
+
+<h3>6.2 What is still unchecked</h3>
 <ul class="tight">
-  <li><strong>Isolation.</strong> The agent runs with <code>--setting-sources project,local</code> so your own user settings, hooks and plugins stay out, and with <code>--plugin-dir</code> pointing at the plugin under test. Variables such as <code>CLAUDE_PROJECT_DIR</code> are unset for the child, so a hook cannot look at the repository the harness was started from.</li>
-  <li><strong>Approval by content.</strong> The second turn of a two-turn case states decisions by what they say ("drop the typecheck rule, leave AGENTS.md exactly as it is"), because the model numbers its proposals differently each run.</li>
-  <li><strong>Which checks run</strong> depends on the case's <code>expect</code> column (for example <code>proposal</code>, <code>apply</code>, <code>none</code> for negative controls).</li>
-  <li><strong>Cost.</strong> The result event of a resumed turn already reports the whole session's cost, so the shared reader takes the last result event rather than summing (see <a href="#lessons">lessons</a>).</li>
+  <li>The real stream of the question tool in an interactive session: only its input shape (documented) and one answer format (observed once) are known.</li>
+  <li>The optional model judge of <code>oaat</code> against human labels.</li>
+  <li>Precision and recall of any grader on a labelled random sample.</li>
+  <li>Representativeness of the 46 hand-picked cases for real use.</li>
+  <li>Any Claude Code version other than 2.1.330, and any model other than the one used. Hook and permission behaviour is "confirmed" only for that version.</li>
+  <li>Whether <code>--setting-sources project,local</code> keeps user-level hooks out on every machine: confirmed by counting hook events in the recorded traces here only.</li>
+  <li>The link of the Google post cited below was not re-verified for this document.</li>
+  <li>Independent replication: none.</li>
 </ul>
 
-<h2 id="harnesses">5. The six harnesses</h2>
-<p>All six live under <code>evals/&lt;plugin&gt;/</code> and share one module, <code>evals/_common/</code> (the stream-json reader and the command runner). The table shows what each grades and what the live runs gave. "Trials" is how many times each case was run for real.</p>
-
-<div class="tablewrap"><table>
-  <thead><tr><th>Plugin</th><th class="num">Cases</th><th class="num">Checks</th><th class="num">Offline tests</th><th>Real runs</th></tr></thead>
-  <tbody>
-    <tr><td><code>oaat</code></td><td class="num">11</td><td class="num">12 per prompt</td><td class="num">132</td><td><span class="pill pass">11 / 11</span> 1 trial each</td></tr>
-    <tr><td><code>agent-md-audit</code></td><td class="num">8</td><td class="num">27</td><td class="num">52</td><td><span class="pill pass">8 / 8</span> 1 trial each</td></tr>
-    <tr><td><code>auto-commit</code></td><td class="num">6</td><td class="num">18</td><td class="num">150</td><td><span class="pill pass">18 / 18</span> 3 trials each</td></tr>
-    <tr><td><code>block-force-push</code></td><td class="num">3</td><td class="num">11</td><td class="num">119</td><td><span class="pill pass">9 / 9</span> 3 trials each</td></tr>
-    <tr><td><code>milestones</code></td><td class="num">10</td><td class="num">23</td><td class="num">239</td><td><span class="pill pass">30 / 30</span> 3 trials each</td></tr>
-    <tr><td><code>sitrep</code></td><td class="num">8</td><td class="num">26</td><td class="num">264</td><td><span class="pill pass">21 / 21</span> 3 trials each on seven cases, plus <span class="pill pass">5 / 5</span> regraded on the new one (see note)</td></tr>
-  </tbody>
-</table></div>
-<p class="meta">Note on <code>sitrep</code>: the seven older cases passed 21 of 21; <code>discover-open-items</code> was run 5 times, 4 trials graded PASS and one was a valid run that the check wrongly graded INCONCLUSIVE, which regrades as a pass after the fix. <code>_common</code> has 33 tests of its own. The number of checks is the size of the harness's <code>GROUPS</code> registry; <code>oaat</code> has 12 checks per prompt (132 over its 11 prompts).</p>
-
-<div class="cards">
-  <div class="card">
-    <h3><code>oaat</code> — the teaching sample</h3>
-    <p>A skill that presents exactly one pending item in a fixed shape and waits. Developed as the PA015 sample (<code>05-oaat-skill-evals</code>) and ported here.</p>
-    <p><strong>Groups:</strong> outcome, process, style, efficiency. Prompts are explicit, implicit, contextual, follow-up (skip, stop, tangent) and negative controls. An optional second model call grades a JSON rubric for what code cannot judge.</p>
-  </div>
-  <div class="card">
-    <h3><code>agent-md-audit</code></h3>
-    <p>A skill that audits <code>CLAUDE.md</code> and <code>AGENTS.md</code> against current documentation, proposes fixes, and applies them <em>only after approval</em>.</p>
-    <p><strong>Graded:</strong> researched online before reading, proposed with a numbered table, <strong>changed no file before approval</strong>; after approval, the dead import and emphasis spam are gone, the contradiction is resolved, <code>AGENTS.md</code> is byte-identical, nothing is committed. The planted fixture has 229 lines and five defects.</p>
-  </div>
-  <div class="card">
-    <h3><code>auto-commit</code> (Stop hook)</h3>
-    <p>When the agent stops with an unsaved repository, the hook reports the state and the agent should save it.</p>
-    <p><strong>Graded from git state:</strong> WIP committed and pushed to a local bare remote, remote changes merged (never rebased) with all earlier commits kept, <code>.env</code> in no commit, no remote invented, nothing done when the tree is clean. The prompts never mention git, so the outcome can only come from the hook.</p>
-  </div>
-  <div class="card">
-    <h3><code>block-force-push</code> (PreToolUse hook)</h3>
-    <p>The hook blocks a history rewrite. A small harness: three cases.</p>
-    <p><strong>Graded:</strong> the rewrite is blocked, the remote ref is unchanged, the agent does not try another spelling, and an ordinary push still goes through (the control case). A hook that errors before running makes the trial INCONCLUSIVE.</p>
-  </div>
-  <div class="card">
-    <h3><code>milestones</code> (skill + Stop reminder)</h3>
-    <p>A project tracker in <code>.cache/milestones.json</code> written through a script.</p>
-    <p><strong>Graded:</strong> the skill triggers on the right prompts and not on others; the tracker ends valid against its schema, in the requested state, other items untouched; it is written only through the script and never committed; the Stop reminder leads to an update only when a milestone really finished.</p>
-  </div>
-  <div class="card">
-    <h3><code>sitrep</code> (skill)</h3>
-    <p>Builds a temporary HTML situation report in a temp directory outside the project.</p>
-    <p><strong>Graded:</strong> the skill triggers; <code>data.js</code> defines <code>window.SITREP</code> and validates against the schema offline in pure Python; the planted open items and their dependency are in the data; nothing is written into the project; the report directory is deleted afterwards.</p>
-  </div>
-</div>
-
-<h3>The checks, by group</h3>
-<div class="tablewrap"><table>
-  <thead><tr><th>Group</th><th>Question it answers</th><th>Evidence</th></tr></thead>
-  <tbody>
-    <tr><td><strong>precondition</strong></td><td>Was the behaviour under test actually exercised?</td><td>plugin loaded, run completed, hook ran without error, report reached the agent, no unexplained denial. A failure makes the trial INCONCLUSIVE.</td></tr>
-    <tr><td><strong>process</strong></td><td>Did the agent take the expected route?</td><td>trace: the Skill tool call, order of tool calls (research before reading), command arguments</td></tr>
-    <tr><td><strong>gate</strong></td><td>Did the agent stay within bounds?</td><td>snapshots: no file added, removed or changed, HEAD unmoved, tracker written only by the script</td></tr>
-    <tr><td><strong>outcome</strong></td><td>Is the end state right?</td><td>snapshots and parsed structures (git history, the tracker, the parsed <code>data.js</code>)</td></tr>
-    <tr><td><strong>apply</strong></td><td>After approval, was the change right and nothing else touched?</td><td>snapshots after turn 2</td></tr>
-    <tr><td><strong>soft</strong> <span class="pill soft">WARN</span></td><td>Does the wording look right?</td><td>regexes over the model's prose; advisory only</td></tr>
-  </tbody>
-</table></div>
-
-<h2 id="lessons">6. What the real runs taught us</h2>
-<p>The interesting part of an eval project is what you only learn by running it. Everything here was measured on 22 November 2026 and is recorded in the READMEs of the harnesses.</p>
-
-<div class="callout warn">
-  <p><strong>Lesson 1: the environment can fail instead of the plugin.</strong> The first attempt ran inside the Claude Code Bash sandbox. Claude Code could not create its plugin data directory, so every hook errored with <code>EPERM</code>, and a session could not be resumed. The harness had graded one such trial as a FAIL of the plugin. That is wrong, and it is why the INCONCLUSIVE verdict and the hook-error precondition exist. Real runs must be started outside that sandbox.</p>
-</div>
-
-<div class="callout warn">
-  <p><strong>Lesson 2: permission modes have surprising edges.</strong> Probing the real CLI with tiny calls showed that <code>dontAsk</code> denies any output redirect (<code>printf x &gt;&gt; f</code>), heredoc writes, shell-variable calls (<code>S=…; python3 "$S" …</code>) and reads of absolute paths outside the working directories, even when the command is on the allow-list. <code>acceptEdits</code> allows redirects; <code>--add-dir</code> allows the extra read. Plain pipes, <code>;</code> chains, <code>2&gt;/dev/null</code> and multi-line commit messages were fine. Guessing grants twice failed; a handful of small probes settled it.</p>
-</div>
-
-<div class="callout ok">
-  <p><strong>Lesson 3: an eval found a real flaw in a skill, and the fix could be measured.</strong> The <code>milestones</code> skill's script call was often rewritten by the model into a shell-variable form that no permission pattern can match.</p>
-  <ul class="tight">
-    <li>Before any change: <code>update-finish-and-start</code> 0 of 3 and <code>create-tracker</code> 0 of 3 trials passed (all inconclusive or failed on the denial).</li>
-    <li>After asking in <code>SKILL.md</code> to write the script path out in every command: update 3 of 3; <code>create-tracker</code> still 1 of 3.</li>
-    <li>After adding a worked example of a chained create: <code>create-tracker</code> 3 of 3, then 3 of 3 again in the repeat pass.</li>
-  </ul>
-  <p>The plugin was bumped twice (0.3.1, 0.3.2) because the behaviour visible to users changed.</p>
-</div>
-
-<div class="callout ok">
-  <p><strong>Lesson 4: a vague prompt exposed a gap in a skill.</strong> With a milestone tracker present and the prompt "what is the state of things in this project?", the <code>sitrep</code> agent built its report from the tracker alone and never opened <code>docs/open-questions.md</code>, in 4 of 5 trials. Naming the file in the prompt made the case pass 5 of 5 but hid the gap, so the case was kept for what it tests (milestone integration) and a new case with the vague prompt was added. After <code>SKILL.md</code> step 1 was changed to tell the agent to look in the working tree, that case passed in every valid trial.</p>
-</div>
-
+<h3>6.3 Check question, answered</h3>
 <div class="callout">
-  <p><strong>Lesson 5: a text check cannot be both strict and fair.</strong> Reviewers kept finding replies a regex graded wrongly in both directions (a correct reply failing, a lying reply passing) and each fix traded one error for the other. The structural answer was the <em>soft</em> group: prose checks warn, state decides.</p>
+  <p><strong>Question.</strong> A teammate says: "<code>milestones</code> passes 30 of 30 trials, so the skill is fixed." Name two things you need to know before accepting that, and the track each belongs to.</p>
 </div>
+<p><strong>Answer.</strong> The claim does not follow as stated. Any two of these four are a correct answer, and the first two matter most.</p>
+<ol class="tight">
+  <li><strong>Which system ran, in which harness.</strong> <span class="pill t-harness">HARNESS</span> The 30 trials ran on Claude Code 2.1.330 under <code>dontAsk</code> with a specific allow-list, outside the sandbox. In the sandbox the same cases could not run at all, and before the skill edit the same cases and harness gave 0 of 3 on two of them. The result holds for that setup only.</li>
+  <li><strong>How uncertain the number is.</strong> <span class="pill t-model">MODEL</span> That is 10 cases, 3 trials each. For one case, 3 of 3 clean trials still allow a true failure rate of about 63% (one-sided 95%). Even pooling all 30 as if independent, the bound is about 9.5%, and they are not independent draws. "No failure seen" is not "no failures".</li>
+  <li><strong>Whether the task set can still discriminate.</strong> <span class="pill t-model">MODEL</span> With every case at 100%, the set is saturated: a regression of a few percent would not show. The cases are invented, hand-picked and in a public repository.</li>
+  <li><strong>Whether the grader is sound and who ran the eval.</strong> <span class="pill t-both">BOTH</span> The graders have a failing run per check and were probed by independent model reviewers, but no human labelled a sample, and the same author directed the build and the runs.</li>
+</ol>
+<p><strong>What the data supports at most.</strong> <em>On Claude Code 2.1.330, in these fixtures and this permission mode, <code>milestones</code> 0.3.2 passed every one of the 30 trials of its 10 cases.</em> Whether the skill works for real users in other setups is a wider claim, and these trials do not settle it.</p>
 
-<div class="callout">
-  <p><strong>Lesson 6: measure the instrument too.</strong> Two older harnesses summed the cost over every result event. In a real two-turn trace the first result reported $0.0906 and the second, of the same session, $0.1201, so the cumulative figure is the last one ($0.1201, not $0.2107). One fix in the shared module corrected both, and some figures quoted in the <code>oaat</code> README dropped (for example $0.76 to $0.64). The same project moved six copies of two files into one shared module, with a test that fails if a copy comes back.</p>
-</div>
+<p class="meta">Source types are named on every external link: vendor documentation, vendor practitioner writing, third-party page. Dates are publication dates where the source shows one. Figures are copied from the READMEs and registries in this repository on 22 and 23 November 2026; if the code has moved on, the READMEs are authoritative.</p>
 
-<p>The harnesses themselves were built by a pipeline of models in assigned roles (research, plan, build, adversarial review, fix), and an independent reviewer read the code on disk after each build. Across the four newer harnesses that review found real bugs over several rounds: checks that failed correct runs, checks that passed lying ones, and verdict logic that could turn a real failure into INCONCLUSIVE. It is a useful reminder that evals are software and need review and tests like any other.</p>
+<!-- ============================================================ appendix -->
+<h2 id="appendix">Appendix: run it yourself, exercises</h2>
+<p>This appendix is an addition to the structure above, for students who want to touch the harnesses.</p>
 
-<h2 id="run">7. How to run them</h2>
 <div class="callout bad">
-  <p><strong>Cost and safety first.</strong> A real run makes model calls on <em>your</em> account (about $0.04 to $0.25 per trial in these runs; <code>agent-md-audit</code> also makes web fetches). It needs Claude Code installed and logged in. For the git plugins the agent runs with a broad <code>git</code> grant in a temporary directory against a local bare remote; if your Bash is not sandboxed it runs with your user rights, so use a VM or container if that worries you. Recorded traces can contain the contents of your <code>~/.claude/CLAUDE.md</code>: do not share <code>artifacts/</code> without looking.</p>
+  <p><strong>Cost and safety first.</strong> A real run makes model calls on <em>your</em> account (about $0.04 to $0.25 per trial in these runs; <code>agent-md-audit</code> also fetches web pages). It needs Claude Code installed and logged in, and it must run <strong>outside the Claude Code Bash sandbox</strong>. For the git plugins the agent runs with a broad <code>git</code> grant in a temporary directory against a local bare remote; if your Bash is not sandboxed it runs with your user rights, so use a VM or container if that worries you. Recorded traces can contain your own <code>~/.claude/CLAUDE.md</code>: do not share <code>artifacts/</code> without looking.</p>
 </div>
 
 <h3>Free and offline (start here)</h3>
-<pre><code># everything: shared module, then all six harnesses (a few minutes: three of them run real git)
+<pre><code># everything: the shared module, then all six harnesses (several minutes: three of them run real git)
 make -C evals/_common test-all
 
 # one harness
@@ -266,7 +583,7 @@ make -C evals/milestones test
 
 # re-grade recorded runs without any model call (needs an artifacts/ directory from a real run of your own)
 python3 evals/sitrep/python/run_evals.py --fixtures evals/sitrep/artifacts</code></pre>
-<p>Offline tests need Python 3 and <code>make</code>, nothing else (standard library only). They are the right place to learn the machinery: read a check in <code>python/checks.py</code>, then its entry in <code>tests/test_checks.py</code>.</p>
+<p>Offline tests need Python 3 and <code>make</code>, nothing else (standard library only). Read a check in <code>python/checks.py</code>, then its entry in <code>tests/test_checks.py</code>.</p>
 
 <h3>Real runs (costs money)</h3>
 <pre><code># one case, one trial: always start here
@@ -274,9 +591,9 @@ make -C evals/block-force-push eval ARGS="--only plain-push-control --trials 1"
 
 # several trials of several cases (comma separated, not a repeated flag)
 make -C evals/milestones eval ARGS="--only create-tracker,update-finish-and-start --trials 3"</code></pre>
-<p>Run real trials from a normal terminal, <strong>outside the Claude Code Bash sandbox</strong>. A trial that cannot run properly ends INCONCLUSIVE with the reason in the failures list. Each README names a canary case to run first.</p>
+<p>Each README names a canary case to run first. A trial that cannot run properly ends INCONCLUSIVE with the reason in the failures list.</p>
 
-<h2 id="layout">8. Where things are</h2>
+<h3>Where things are</h3>
 <pre><code>evals/
   _common/python/agent_trace.py   the stream-json reader (the cost rule lives here)
   _common/python/runner_cmd.py    runs the agent command with a timeout
@@ -292,57 +609,75 @@ make -C evals/milestones eval ARGS="--only create-tracker,update-finish-and-star
     tests/test_checks.py          MUTATIONS: one failing run per check
     artifacts/                    recorded traces and snapshots (git-ignored)</code></pre>
 
-<h2 id="exercises">9. Exercises</h2>
-<p>Start with the offline tests; none of these needs a model.</p>
-<details><summary>1. Break a check on purpose</summary>
+<h3>Exercises</h3>
+<p>None of these needs a model.</p>
+<details><summary>1. Break a check on purpose (stage 4)</summary>
   <p>Pick one check in <code>evals/milestones/python/checks.py</code> and make it always return <code>True</code>. Which test fails, and why does that test exist? Revert.</p></details>
-<details><summary>2. Add a mutation</summary>
-  <p>Find a check whose entry in <code>MUTATIONS</code> only covers one way to fail. Write a second invented bad run that it should also catch. Does it? If not, you found a false negative.</p></details>
-<details><summary>3. Design a negative control</summary>
-  <p>For <code>sitrep</code>, write a prompt that is close to "show me the situation" but must <em>not</em> trigger the skill. Why is a near miss a better test than an obviously unrelated prompt?</p></details>
-<details><summary>4. Explain INCONCLUSIVE</summary>
-  <p>Read the <code>EXPLAINED_BY</code> table in a harness. Give one example where a failed precondition should turn a failure into INCONCLUSIVE and one where it must not. State the rule in one sentence ("a precondition may explain a missing effect, never a wrong write") and test it on your examples.</p></details>
-<details><summary>5. Fair or unfair?</summary>
-  <p>Take the advisory <code>reply-hands-over</code> check of <code>sitrep</code>. Write a reply it would wrongly warn about and one it would wrongly accept. Why was it made advisory instead of being tuned?</p></details>
-<details><summary>6. Plan an experiment</summary>
-  <p>You change one sentence of a skill. How many trials per case do you need before you trust a before/after difference? What would you record to make the comparison fair? (Hint: in this project one case went from no passing trial to 3 of 3 after a short change to a skill.)</p></details>
-<details><summary>7. Review a harness</summary>
-  <p>Pick one README and list every statement of the form "unconfirmed". For each, say what real run or probe would settle it, and what it would cost.</p></details>
+<details><summary>2. Add a failing run (judge step 2)</summary>
+  <p>Find a check whose entry in <code>MUTATIONS</code> covers only one way to fail. Write a second invented bad run that it should also catch. Does it? If not, you found a false negative.</p></details>
+<details><summary>3. Design a negative control (stage 2)</summary>
+  <p>For <code>sitrep</code>, write a prompt close to "show me the situation" that must <em>not</em> trigger the skill. Why is a near miss a better test than an unrelated prompt?</p></details>
+<details><summary>4. Explain INCONCLUSIVE (stage 4)</summary>
+  <p>Read the <code>EXPLAINED_BY</code> table in a harness. Give one example where a failed precondition should turn a failure into INCONCLUSIVE and one where it must not. State the rule in one sentence and test it on your examples.</p></details>
+<details><summary>5. Fair or unfair? (judge step 6)</summary>
+  <p>Take the advisory <code>reply-hands-over</code> check of <code>sitrep</code>. Write a reply it would wrongly warn about and one it would wrongly accept. Why is it advisory instead of tuned?</p></details>
+<details><summary>6. Put an interval on a claim (stage 5)</summary>
+  <p>A case passes 5 of 5 trials. Compute the one-sided 95% upper bound on its failure rate. How many clean trials would you need to rule out a 10% failure rate?</p></details>
+<details><summary>7. Review a harness (rule 2 and rule 6)</summary>
+  <p>Pick one README and list every statement marked "unconfirmed". For each, say what real run or probe would settle it and what it would cost.</p></details>
 
-<h2 id="limits">10. What is not measured</h2>
+<h2 id="sources">Sources</h2>
 <ul class="tight">
-  <li><strong>Sample sizes are small.</strong> One to five trials per case. Three clean trials do not prove a model never misses; they rule out frequent misses.</li>
-  <li><strong>One model and one version of the tool.</strong> Everything was run on Claude Code 2.1.330. Hook and permission behaviour is documented in the READMEs as "confirmed" only for that version.</li>
-  <li><strong>Heuristics remain.</strong> The command-line checks read parsed arguments, but a rare spelling (for example a push hidden inside a heredoc) can slip past them; the state checks still catch the result if it lands.</li>
-  <li><strong>The checks judge structure, not quality.</strong> They can say a proposal named the planted defect, not whether the proposed fix is a good one.</li>
-  <li><strong>The sandbox caveat.</strong> Real runs happen outside the Claude Code Bash sandbox; the graders and the unit tests do not need that.</li>
-</ul>
-
-<h2 id="glossary">11. Glossary and sources</h2>
-<dl>
-  <dt>Trace</dt><dd>The JSON-lines event stream of a headless run: init event, assistant and tool events, hook events, result event.</dd>
-  <dt>Snapshot</dt><dd>Every file with its hash, line count and text, plus git HEAD and, where relevant, the remote's refs. Taken before, after turn 1 and after turn 2.</dd>
-  <dt>Fixture</dt><dd>The prepared workspace a case starts from, generated by code in a temporary directory.</dd>
-  <dt>Negative control</dt><dd>A prompt on which the skill must <em>not</em> trigger or must change nothing.</dd>
-  <dt>Canary</dt><dd>The cheapest case that shows within one run whether the unverified assumptions hold.</dd>
-  <dt>Mutation (here)</dt><dd>An invented bad run, built by changing a good one, that a specific check must catch.</dd>
-  <dt>Precondition / soft check</dt><dd>See sections 3 and 5.</dd>
-  <dt>Flakiness</dt><dd>The same case giving different verdicts on identical input, measured by repeated trials.</dd>
-</dl>
-
-<h3>Sources</h3>
-<ul class="tight">
-  <li>OpenAI, "Testing Agent Skills Systematically with Evals", <a href="https://developers.openai.com/blog/eval-skills">developers.openai.com/blog/eval-skills</a> (the page shows no date or author; read 4 November 2026; link checked 22 November 2026). Source of the four success groups, the prompt CSV with <code>should_trigger</code>, one JSONL trace per prompt and deterministic checks over the trace.</li>
-  <li>Mullen and Gunderman, "The Anatomy of Harness Engineering", Google for Developers Blog, 9 September 2026 (read 4 November 2026). Source of the behavioural eval idea: assert on a tool call and observable behaviour, not on prose. The link was not re-verified for this document.</li>
-  <li>Claude Code documentation, read and checked while building the harnesses: <a href="https://code.claude.com/docs/en/hooks">hooks</a>, <a href="https://code.claude.com/docs/en/headless">headless mode</a>, <a href="https://code.claude.com/docs/en/plugin-evals">plugin evals</a> (the built-in runner discussed in section 1).</li>
+  <li>Structure model: "Evaluations State of the Art Map", a public artifact at <a href="https://claude.ai/artifact/QfPBd6dq8rftUQV4Wsi1Vt">claude.ai/artifact/QfPBd6dq8rftUQV4Wsi1Vt</a>; third-party page, author unknown, compiled 21 November 2026 and expanded 22 November 2026. Used only as the template for the sections and fields of this document; none of its figures, sources or claims are reused.</li>
+  <li>OpenAI, "Testing Agent Skills Systematically with Evals", <a href="https://developers.openai.com/blog/eval-skills">developers.openai.com/blog/eval-skills</a>; vendor practitioner writing; no date or author shown; read 4 November 2026, link checked 22 November 2026. Source of the four success groups, the prompt CSV with <code>should_trigger</code>, one JSONL trace per prompt and deterministic checks over the trace.</li>
+  <li>Mullen and Gunderman, "The Anatomy of Harness Engineering", Google for Developers Blog; vendor practitioner writing; 9 September 2026; read 4 November 2026. Source of the behavioural-eval idea (assert on a tool call and observable behaviour, not on prose). The link was not re-verified for this document.</li>
+  <li>Claude Code documentation; vendor documentation; read and checked while building the harnesses: <a href="https://code.claude.com/docs/en/hooks">hooks</a>, <a href="https://code.claude.com/docs/en/headless">headless mode</a>, <a href="https://code.claude.com/docs/en/plugin-evals">plugin evals</a>, and the Agent SDK page on user input for the question tool's input limits.</li>
   <li>The PA015 sample <code>05-oaat-skill-evals</code> (Ondrej Krajicek, course PA015, Masaryk University) is the origin of <code>evals/oaat</code>.</li>
-  <li>The per-harness READMEs under <code>evals/</code> hold the full record, including every real-run result, the cost of each run and the list of things still unconfirmed.</li>
+  <li>Primary record of every number above: the per-harness READMEs under <a href="evals/oaat/README.md"><code>evals/oaat</code></a>, <a href="evals/agent-md-audit/README.md"><code>agent-md-audit</code></a>, <a href="evals/auto-commit/README.md"><code>auto-commit</code></a>, <a href="evals/block-force-push/README.md"><code>block-force-push</code></a>, <a href="evals/milestones/README.md"><code>milestones</code></a>, <a href="evals/sitrep/README.md"><code>sitrep</code></a>.</li>
 </ul>
 
 <footer>
-  <p>Written from the state of the repository on 22 November 2026. Numbers of tests, checks and trials are copied from the harness READMEs and registries at that date; if the code has moved on, the READMEs are authoritative.</p>
+  <p>Compiled 23 November 2026. Leaderboards and tool versions change; the READMEs, not this page, are authoritative for any number.</p>
 </footer>
 
 </div>
+<script>
+(function () {
+  // Selectable stages, steps and parts: one panel open at a time; without JavaScript every panel stays visible.
+  document.querySelectorAll('[data-sel]').forEach(function (root) {
+    var buttons = root.querySelectorAll('button[data-target]');
+    function open(id) {
+      buttons.forEach(function (b) { b.setAttribute('aria-pressed', String(b.getAttribute('data-target') === id)); });
+      root.querySelectorAll('.panel').forEach(function (p) { p.classList.toggle('open', p.id === id); });
+    }
+    buttons.forEach(function (b) { b.addEventListener('click', function () { open(b.getAttribute('data-target')); }); });
+    if (buttons.length) open(buttons[0].getAttribute('data-target'));
+  });
+  // Filters of the map: group, track, trust.
+  var cards = Array.prototype.slice.call(document.querySelectorAll('#cards .card'));
+  var state = { group: 'all', track: 'all', trust: 'all' };
+  var count = document.getElementById('count');
+  function apply() {
+    var shown = 0;
+    cards.forEach(function (c) {
+      var ok = ['group', 'track', 'trust'].every(function (k) { return state[k] === 'all' || c.getAttribute('data-' + k) === state[k]; });
+      c.classList.toggle('hide', !ok);
+      if (ok) shown++;
+    });
+    if (count) count.textContent = 'Showing ' + shown + ' of ' + cards.length + '.';
+  }
+  document.querySelectorAll('#filters .grp').forEach(function (grp) {
+    var key = grp.getAttribute('data-key');
+    grp.querySelectorAll('button').forEach(function (b) {
+      b.addEventListener('click', function () {
+        state[key] = b.getAttribute('data-v');
+        grp.querySelectorAll('button').forEach(function (x) { x.setAttribute('aria-pressed', String(x === b)); });
+        apply();
+      });
+    });
+  });
+  apply();
+})();
+</script>
 </body>
 </html>
