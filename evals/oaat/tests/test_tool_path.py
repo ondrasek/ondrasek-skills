@@ -997,6 +997,24 @@ class MilestoneTests(unittest.TestCase):
         self.assertIn("minus 7 milestone bookkeeping call(s)", verdict["turns-bound"][1])
 
 
+class TypedAnswerEnvelope(unittest.TestCase):
+    """An answer typed into the free-text field arrives in a second observed wrapper; the text here is invented, the frame is the observed one."""
+
+    QUESTION = "Item 2 of 4, risk: Rotate the signing key. The key is old. Rotate it now?"
+    TAIL = " Read the answers carefully \u2014 they may request clarification, changes, or that you not proceed."
+
+    def content(self, typed):
+        return f'The user answered: "{self.QUESTION}"="{typed}".{self.TAIL}'
+
+    def test_the_typed_text_is_read_out_of_the_wrapper(self):
+        for typed in ("stop", 'what does "rotate" mean, here?', "Skip for now"):
+            self.assertEqual(ask_tool.answer_of(self.content(typed), [self.QUESTION]), (typed, "wrapper"), typed)
+
+    def test_a_sentence_that_only_starts_like_the_wrapper_stays_whole(self):
+        content = "The user answered: nothing in this shape."
+        self.assertEqual(ask_tool.answer_of(content, [self.QUESTION]), (content, "bare"))
+
+
 class EnvelopeTests(unittest.TestCase):
     """The answer is read out of the OBSERVED wrapper (one sample, one version: UNCONFIRMED), a bare label or a JSON mapping."""
 

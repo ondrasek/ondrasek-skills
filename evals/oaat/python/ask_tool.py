@@ -23,8 +23,12 @@ answers, one `"<question text>"="<answer>"` pair per question, joined by `, `:
 
     Your questions have been answered: "<question 1>"="<label 1>", "<question 2>"="<label 2>". You can now continue with these answers in mind.
 
-The label is verbatim (a `(Recommended)` suffix included); a free-text answer ("Other") stands in the same position. One sample, one
-version: `answer_of` therefore also accepts a bare label (the earlier assumption) and a JSON mapping of question to answer (the shape
+The label is verbatim (a `(Recommended)` suffix included). An answer TYPED into the free-text field comes back in a second wrapper
+(observed 2026-11-28, Claude Code 2.1.332):
+
+    The user answered: "<question>"="<typed text>". Read the answers carefully — they may request clarification, ...
+
+Few samples, two versions: `answer_of` therefore also accepts a bare label (the earlier assumption) and a JSON mapping of question to answer (the shape
 of the SDK's `answers`). The standard stream-json shape around it is assumed:
 
     {"type": "assistant", "parent_tool_use_id": null, "message": {"content": [
@@ -108,7 +112,10 @@ def ask_calls(events):
     return [tool_input for name, tool_input in trace.tool_calls(events) if name == TOOL]
 
 
+# Two observed wrappers (interactive sessions): a picked option comes back in the first, an answer TYPED into the free-text field in the
+# second (observed 2026-11-28, Claude Code 2.1.332). The tail of the second is matched loosely: only its first words are relied on.
 ENVELOPE_RE = re.compile(r"\A\s*Your questions have been answered:\s*(?P<body>.*?)\s*You can now continue with these answers in mind\.?\s*\Z", re.DOTALL)
+TYPED_RE = re.compile(r"\A\s*The user answered:\s*(?P<body>.*?\"\.)\s*Read the answers carefully\b.*\Z", re.DOTALL)
 PAIR_RE = re.compile(r'"((?:[^"\\]|\\.)*)"="((?:[^"\\]|\\.)*)"')
 
 
@@ -137,7 +144,7 @@ def answer_of(content, question_texts):
     An unparsable wrapper falls back to the whole content, which then reads as free text.
     """
     text = content.strip()
-    found = ENVELOPE_RE.match(content)
+    found = ENVELOPE_RE.match(content) or TYPED_RE.match(content)
     if found:
         body = found.group("body").strip()
         if body.endswith("."):

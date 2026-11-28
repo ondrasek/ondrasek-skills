@@ -126,7 +126,7 @@
   <p class="kicker">PA015 · course material</p>
   <h1>Evals of agent skills: a map</h1>
   <p class="lede">What the six eval harnesses of this repository measure, how far each number can be trusted, and what you can learn from the way they were built. Structured as a map: the anatomy of a score, how to earn trust in a grader, the parts of the harness, a filterable set of topic cards, a dated timeline, and what to carry away.</p>
-  <p class="meta">Compiled 23 November 2026 from the repository as of 22 November 2026 · real runs 4 to 22 November 2026 · Claude Code 2.1.330 unless a line says otherwise. The structure follows the public page "Evaluations State of the Art Map" (author unknown); none of its figures or claims are reused here.</p>
+  <p class="meta">Compiled 23 November 2026, updated 28 November 2026 · real runs 4 to 22 November 2026 on Claude Code 2.1.330 unless a line says otherwise; one interactive walk on 28 November on 2.1.332. The structure follows the public page "Evaluations State of the Art Map" (author unknown); none of its figures or claims are reused here.</p>
 </header>
 
 <nav class="toc" aria-label="Contents">
@@ -184,7 +184,7 @@
     <tr><td><code>sitrep</code> (skill)</td><td>a parseable report outside the project with every open item, cleaned up afterwards</td><td class="num">8</td><td><span class="pill pass">21 / 21</span> on seven cases, <span class="pill pass">5 / 5</span> on the eighth after regrading (see stage 4)</td></tr>
   </tbody>
 </table></div>
-<p class="meta">46 cases in total. Offline, the harnesses have 1,126 unit tests (<code>_common</code> 33, <code>oaat</code> 269, <code>agent-md-audit</code> 52, <code>auto-commit</code> 150, <code>block-force-push</code> 119, <code>milestones</code> 239, <code>sitrep</code> 264) and every real-run record is in the harness READMEs.</p>
+<p class="meta">46 cases in total. Offline, the harnesses have 1,128 unit tests (<code>_common</code> 33, <code>oaat</code> 271, <code>agent-md-audit</code> 52, <code>auto-commit</code> 150, <code>block-force-push</code> 119, <code>milestones</code> 239, <code>sitrep</code> 264) and every real-run record is in the harness READMEs.</p>
 
 <!-- ============================================================ 1 -->
 <h2 id="anatomy">1. Anatomy of a score</h2>
@@ -221,7 +221,7 @@
     <dl>
       <dt>What it is here</dt><dd>The plugin loaded with <code>--plugin-dir</code>, the model, Claude Code 2.1.330, and the <strong>permission mode with its allow-list</strong>. The user's own settings are left out (<code>--setting-sources project,local</code>).</dd>
       <dt>How it fails</dt><dd>A score is credited to the skill when the permission mode produced it. Inside the Claude Code sandbox, hooks could not run at all (they could not create their data directory) and a session could not be resumed. Under <code>dontAsk</code>, three shapes were denied that no allow-list pattern could permit: output redirects, shell-variable calls, and reads outside the working directory.</dd>
-      <dt>Where we stand</dt><dd>Measured with small probes of the real CLI. Real runs must be started outside the sandbox. The git harnesses run under <code>acceptEdits</code>; <code>sitrep</code> also adds its plugin directory with <code>--add-dir</code>. Every README records the exact command and version.</dd>
+      <dt>Where we stand</dt><dd>Measured with small probes of the real CLI. Real runs must be started outside the sandbox. <code>auto-commit</code> and <code>sitrep</code> run under <code>acceptEdits</code>, <code>block-force-push</code> and <code>milestones</code> under <code>dontAsk</code>; <code>sitrep</code> also adds its plugin directory with <code>--add-dir</code>. Every README records the exact command and version.</dd>
     </dl>
     <div class="tags"><span class="pill t-harness">HARNESS</span><span class="pill u-est">established</span> evidence: Lessons in the <a href="evals/auto-commit/README.md">auto-commit</a> and <a href="evals/milestones/README.md">milestones</a> READMEs</div>
   </article>
@@ -251,7 +251,7 @@
     <dl>
       <dt>What it is here</dt><dd>The sentence in a README status line, for example "<code>milestones</code>: 30 of 30 trials pass on Claude Code 2.1.330".</dd>
       <dt>How it fails</dt><dd>The claim is wider than the evidence: "the skill works" from invented traces; "the tool path works" for <code>oaat</code>, when headless runs cannot call that tool at all (measured: it is absent in <code>claude -p</code>).</dd>
-      <dt>Where we stand</dt><dd>Every README separates what real runs confirmed from what is still unconfirmed. The <code>oaat</code> tool path is graded only on invented traces plus one observed answer format, and the README says so in capitals.</dd>
+      <dt>Where we stand</dt><dd>Every README separates what real runs confirmed from what is still unconfirmed. The <code>oaat</code> tool path is graded on invented traces; one real interactive walk has been checked, and the README says what is still unconfirmed.</dd>
     </dl>
     <div class="tags"><span class="pill t-both">BOTH</span><span class="pill u-inf">my inference</span> evidence: the "Unconfirmed" lists in every README</div>
   </article>
@@ -383,9 +383,9 @@
     <dl>
       <dt>What it is here</dt><dd>Four handovers: a hook's report back to the agent (a Stop hook that exits with code 2 continues the run, documented and observed), the approval message of turn 2 (stated by content, because the model numbers its proposals differently every run), the answer of the question tool (returned inside the same turn), and sub-agents.</dd>
       <dt>How it breaks</dt><dd>Work done in a sub-agent is invisible in the main trace, so a trace-only grader would miss it.</dd>
-      <dt>Isolated evaluation</dt><dd>This is the reason the ground truth is the file and git snapshot, not the transcript. The observed answer format of the question tool is a wrapper sentence, not a bare label; the harness parses it and labels it unconfirmed across versions.</dd>
+      <dt>Isolated evaluation</dt><dd>This is the reason the ground truth is the file and git snapshot, not the transcript. The question tool answers in a wrapper sentence, not a bare label, and a typed answer uses a different sentence from a picked option. The second was found only by driving a real session; the harness now parses both.</dd>
     </dl>
-    <div class="tags"><span class="pill t-harness">HARNESS</span><span class="pill u-est">established</span> (hooks) <span class="pill u-con">contested</span> (question-tool envelope: one sample)</div>
+    <div class="tags"><span class="pill t-harness">HARNESS</span><span class="pill u-est">established</span> (hooks) <span class="pill u-con">contested</span> (question-tool envelope: few samples)</div>
   </article>
 
   <article class="panel" id="h6">
@@ -437,7 +437,7 @@
   <div class="card" data-group="Design" data-track="harness" data-trust="est">
     <div class="tags"><span class="pill t-harness">HARNESS</span><span class="pill u-est">established</span></div>
     <h4>An offline stub agent</h4><p>A stand-in prints invented traces and edits real files in real temporary git repositories, so the whole runner is tested without a model.</p>
-    <p class="num">1,126 offline tests</p>
+    <p class="num">1,128 offline tests</p>
     <p class="mis">Misconception: you must pay for a model call to test a harness.</p>
   </div>
   <div class="card" data-group="Design" data-track="harness" data-trust="est">
@@ -494,10 +494,10 @@
     <p class="num">22 of 22 headless trials pass on the fallback</p>
     <p class="mis">Misconception: a passing live suite covers the whole feature.</p>
   </div>
-  <div class="card" data-group="Results" data-track="both" data-trust="gap">
-    <div class="tags"><span class="pill t-both">BOTH</span><span class="pill u-gap">not yet checked</span></div>
-    <h4>The tool path, interactively</h4><p>Its event shape is graded from invented traces plus one observed answer format; the full real stream has never been recorded.</p>
-    <p class="num">0 real interactive traces graded</p>
+  <div class="card" data-group="Results" data-track="both" data-trust="con">
+    <div class="tags"><span class="pill t-both">BOTH</span><span class="pill u-con">contested</span></div>
+    <h4>The tool path, interactively</h4><p>One real walk (three items) behaved as the skill says, and exposed a second answer wrapper the parser did not know.</p>
+    <p class="num">1 real interactive walk: 19 of 19 gradable checks</p>
     <p class="mis">Misconception: invented fixtures that match the docs match the product.</p>
   </div>
   <div class="card" data-group="Results" data-track="both" data-trust="gap">
@@ -517,12 +517,13 @@
   <li class="harness"><span class="d">21 Nov 2026</span><div class="h"><code>agent-md-audit</code> and its evals</div><p>The first harness that grades files and git state instead of the transcript.</p></li>
   <li class="harness"><span class="d">22 Nov 2026</span><div class="h">Harnesses for four more plugins, built and reviewed offline</div><p><code>auto-commit</code>, <code>block-force-push</code>, <code>milestones</code>, <code>sitrep</code>: several review rounds, a stub agent, a failing run for every check.</p></li>
   <li class="harness"><span class="d">22 Nov 2026</span><div class="h">First real runs: the first attempt is void</div><p>Inside the Claude Code sandbox the hooks error and sessions cannot resume. Outside it, the canaries pass.</p></li>
-  <li class="harness"><span class="d">22 Nov 2026</span><div class="h">Probes of the permission modes</div><p>Redirects, shell variables and outside reads are denied under <code>dontAsk</code>. The git harnesses move to <code>acceptEdits</code>.</p></li>
+  <li class="harness"><span class="d">22 Nov 2026</span><div class="h">Probes of the permission modes</div><p>Redirects, shell variables and outside reads are denied under <code>dontAsk</code>. <code>auto-commit</code> and <code>sitrep</code> move to <code>acceptEdits</code>.</p></li>
   <li class="model"><span class="d">22 Nov 2026</span><div class="h">A skill edit measured: <code>milestones</code> 0.3.1 and 0.3.2</div><p>Write the script path out in every call; a worked chained create. Denied trials go from 6 of 6 to none.</p></li>
   <li class="model"><span class="d">22 Nov 2026</span><div class="h">The <code>sitrep</code> discovery gap, found and fixed</div><p>The vague prompt skipped the open-questions file in 4 of 5 trials; <code>sitrep</code> 0.3.1 closes it.</p></li>
   <li class="harness"><span class="d">22 Nov 2026</span><div class="h">One shared module, one cost rule</div><p><code>evals/_common/</code> replaces six copies; the two-turn cost double-count is fixed.</p></li>
   <li class="both"><span class="d">22 Nov 2026</span><div class="h">Repeat passes and the older two harnesses</div><p>Three trials per case: 18 of 18, 9 of 9, 30 of 30, 21 of 21 (plus 5 of 5 regraded). <code>agent-md-audit</code>'s first real run: 8 of 8. <code>oaat</code> after the move: 11 of 11.</p></li>
   <li class="harness"><span class="d">22 Nov 2026</span><div class="h"><code>oaat</code> 0.3.0 to 0.3.2: the question tool</div><p>The skill uses <code>AskUserQuestion</code> when it is available. Headless runs cannot call it, so its checks are graded offline, per call, on invented traces; the live suite passes 22 of 22 on the fallback.</p></li>
+  <li class="both"><span class="d">28 Nov 2026</span><div class="h">First interactive walk of the question tool</div><p>Three invented items in a real terminal session. The skill behaved as written; a typed answer arrived in a wrapper the parser did not know, now fixed.</p></li>
 </ol>
 
 <!-- ============================================================ 6 -->
@@ -541,7 +542,7 @@
 
 <h3>6.2 What is still unchecked</h3>
 <ul class="tight">
-  <li>The real stream of the question tool in an interactive session: only its input shape (documented) and one answer format (observed once) are known.</li>
+  <li>The question tool beyond one interactive walk: a denied or failed call, a retry, a tangent, <code>Chat about this</code>, and the stream-json form of its events.</li>
   <li>The optional model judge of <code>oaat</code> against human labels.</li>
   <li>Precision and recall of any grader on a labelled random sample.</li>
   <li>Representativeness of the 46 hand-picked cases for real use.</li>
